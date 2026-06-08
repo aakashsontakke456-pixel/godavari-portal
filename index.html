@@ -517,14 +517,15 @@ const msalConfig = {
     authority:   `https://login.microsoftonline.com/${CONFIG.tenantId}`,
     redirectUri: "https://aakashsontakke456-pixel.github.io/godavari-portal/index.html",
   },
-  cache: { cacheLocation: "localStorage" }
+  cache: { cacheLocation: "sessionStorage" }
 };
 
 const loginRequest = {
   scopes: [
     "User.Read",
     "Sites.ReadWrite.All",
-  ]
+  ],
+  prompt: "select_account"
 };
 
 // ── STATE ──
@@ -781,7 +782,7 @@ async function loadEntries() {
     }).join("");
 
   } catch (err) {
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="6" style="color:var(--danger)">⚠ ${esc(err.message)}</td></tr>`;
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="6" style="color:var(--danger)">⚠ ${esc(err.message)} — Make sure you have access to the SharePoint site.</td></tr>`;
   }
 }
 
