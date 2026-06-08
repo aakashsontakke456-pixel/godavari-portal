@@ -1,0 +1,811 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Godavari Urban – Data Entry Portal</title>
+
+  <!-- Microsoft MSAL (Authentication) -->
+  <!-- MSAL Library — multiple CDN fallbacks -->
+  <script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@3.28.0/lib/msal-browser.min.js"></script>
+  <script>
+    // If jsdelivr failed, try unpkg as fallback
+    if (typeof msal === "undefined") {
+      document.write('<scr'+'ipt src="https://unpkg.com/@azure/msal-browser@3.28.0/lib/msal-browser.min.js"><\/scr'+'ipt>');
+    }
+  </script>
+
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+
+  <style>
+    :root {
+      --bg:        #0d1117;
+      --surface:   #161b22;
+      --border:    #30363d;
+      --accent:    #00c6a7;
+      --accent2:   #0078d4;
+      --text:      #e6edf3;
+      --muted:     #8b949e;
+      --danger:    #f85149;
+      --success:   #3fb950;
+      --radius:    12px;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Sora', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    /* ── TOPBAR ── */
+    header {
+      width: 100%;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0 32px;
+      height: 60px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 700;
+      font-size: 1rem;
+      letter-spacing: -0.3px;
+    }
+    .brand-dot {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 10px var(--accent);
+    }
+    .user-chip {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(0,198,167,0.1);
+      border: 1px solid rgba(0,198,167,0.3);
+      border-radius: 100px;
+      padding: 4px 14px 4px 6px;
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: var(--accent);
+    }
+    .avatar {
+      width: 28px; height: 28px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #00c6a7, #0078d4);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.72rem;
+      font-weight: 700;
+      color: #fff;
+    }
+    .logout-btn {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      padding: 5px 14px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 0.8rem;
+      font-family: 'Sora', sans-serif;
+      transition: all .2s;
+    }
+    .logout-btn:hover { border-color: var(--danger); color: var(--danger); }
+
+    /* ── LOGIN SCREEN ── */
+    #login-screen {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 40px 20px;
+    }
+    .login-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 52px 48px;
+      max-width: 420px;
+      width: 100%;
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+    }
+    .login-card::before {
+      content: '';
+      position: absolute;
+      top: -80px; left: 50%;
+      transform: translateX(-50%);
+      width: 200px; height: 200px;
+      background: radial-gradient(circle, rgba(0,198,167,0.15) 0%, transparent 70%);
+      pointer-events: none;
+    }
+    .login-logo {
+      width: 64px; height: 64px;
+      border-radius: 16px;
+      background: linear-gradient(135deg, rgba(0,198,167,0.2), rgba(0,120,212,0.2));
+      border: 1px solid rgba(0,198,167,0.3);
+      margin: 0 auto 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.8rem;
+    }
+    .login-card h1 {
+      font-size: 1.6rem;
+      font-weight: 700;
+      margin-bottom: 8px;
+      letter-spacing: -0.5px;
+    }
+    .login-card p {
+      color: var(--muted);
+      font-size: 0.9rem;
+      margin-bottom: 36px;
+      line-height: 1.6;
+    }
+    .ms-btn {
+      width: 100%;
+      padding: 14px 20px;
+      background: var(--accent2);
+      border: none;
+      border-radius: var(--radius);
+      color: #fff;
+      font-family: 'Sora', sans-serif;
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      transition: all .2s;
+      letter-spacing: -0.2px;
+    }
+    .ms-btn:hover { background: #006cbd; transform: translateY(-1px); box-shadow: 0 8px 24px rgba(0,120,212,0.3); }
+    .ms-btn:active { transform: translateY(0); }
+    .ms-btn:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
+    .ms-btn svg { flex-shrink: 0; }
+
+    /* ── MAIN APP ── */
+    #app-screen {
+      display: none;
+      width: 100%;
+      max-width: 860px;
+      padding: 40px 20px 60px;
+    }
+
+    .page-title {
+      font-size: 1.6rem;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+      margin-bottom: 4px;
+    }
+    .page-sub {
+      color: var(--muted);
+      font-size: 0.875rem;
+      margin-bottom: 32px;
+    }
+
+    /* ── FORM CARD ── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 28px 32px;
+      margin-bottom: 24px;
+    }
+    .card-title {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 20px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .card-title::before {
+      content: '';
+      display: inline-block;
+      width: 3px; height: 14px;
+      background: var(--accent);
+      border-radius: 2px;
+    }
+
+    .form-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+    .form-group { display: flex; flex-direction: column; gap: 6px; }
+    .form-group.full { grid-column: 1 / -1; }
+
+    label {
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--muted);
+      letter-spacing: 0.3px;
+    }
+    input, select, textarea {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-family: 'Sora', sans-serif;
+      font-size: 0.9rem;
+      padding: 10px 14px;
+      transition: border-color .2s, box-shadow .2s;
+      outline: none;
+    }
+    textarea { resize: vertical; min-height: 90px; }
+    input:focus, select:focus, textarea:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(0,198,167,0.12);
+    }
+    select option { background: var(--surface); }
+
+    .submit-btn {
+      margin-top: 20px;
+      padding: 13px 28px;
+      background: var(--accent);
+      border: none;
+      border-radius: var(--radius);
+      color: #0d1117;
+      font-family: 'Sora', sans-serif;
+      font-size: 0.95rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all .2s;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .submit-btn:hover { background: #00e2bc; box-shadow: 0 6px 20px rgba(0,198,167,0.3); transform: translateY(-1px); }
+    .submit-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+    /* ── TOAST ── */
+    .toast-wrap {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      z-index: 999;
+    }
+    .toast {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 18px;
+      font-size: 0.85rem;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 240px;
+      animation: slideIn .3s ease;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    }
+    .toast.success { border-left: 3px solid var(--success); }
+    .toast.error   { border-left: 3px solid var(--danger); }
+    .toast.info    { border-left: 3px solid var(--accent2); }
+    @keyframes slideIn { from { transform: translateX(80px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+    /* ── DATA TABLE ── */
+    .table-wrap { overflow-x: auto; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.875rem;
+    }
+    th {
+      text-align: left;
+      padding: 10px 14px;
+      color: var(--muted);
+      font-size: 0.78rem;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      border-bottom: 1px solid var(--border);
+      font-weight: 600;
+    }
+    td {
+      padding: 12px 14px;
+      border-bottom: 1px solid rgba(48,54,61,0.5);
+      color: var(--text);
+      vertical-align: middle;
+    }
+    tr:hover td { background: rgba(255,255,255,0.02); }
+    .badge {
+      display: inline-block;
+      padding: 2px 10px;
+      border-radius: 100px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      background: rgba(0,198,167,0.12);
+      color: var(--accent);
+      border: 1px solid rgba(0,198,167,0.2);
+    }
+    .empty-row td {
+      text-align: center;
+      color: var(--muted);
+      padding: 40px;
+    }
+
+    /* Loader */
+    .spinner {
+      width: 16px; height: 16px;
+      border: 2px solid rgba(0,198,167,0.2);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+      display: inline-block;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .refresh-btn {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      padding: 6px 14px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 0.8rem;
+      font-family: 'Sora', sans-serif;
+      transition: all .2s;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .refresh-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .card-header-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 20px;
+    }
+    .card-header-row .card-title { margin-bottom: 0; }
+
+    /* Loading overlay on login button */
+    #login-status {
+      font-size: 0.78rem;
+      color: var(--muted);
+      margin-top: 14px;
+      min-height: 18px;
+    }
+
+    @media (max-width: 600px) {
+      .form-grid { grid-template-columns: 1fr; }
+      .login-card { padding: 36px 24px; }
+      header { padding: 0 16px; }
+      #app-screen { padding: 24px 14px 60px; }
+    }
+  </style>
+</head>
+
+<body>
+
+<!-- TOP BAR -->
+<header>
+  <div class="brand">
+    <div class="brand-dot"></div>
+    Godavari Urban Portal
+  </div>
+  <div id="header-right" style="display:flex;align-items:center;gap:12px;"></div>
+</header>
+
+<!-- LOGIN SCREEN -->
+<div id="login-screen">
+  <div class="login-card">
+    <div class="login-logo">🏙️</div>
+    <h1>Data Entry Portal</h1>
+    <p>Godavari Urban Development<br/>Sign in with your organization account to continue</p>
+    <button class="ms-btn" id="signin-btn" onclick="signIn()" disabled>
+      <svg width="20" height="20" viewBox="0 0 23 23" xmlns="http://www.w3.org/2000/svg">
+        <rect x="1" y="1" width="10" height="10" fill="#f25022"/>
+        <rect x="12" y="1" width="10" height="10" fill="#7fba00"/>
+        <rect x="1" y="12" width="10" height="10" fill="#00a4ef"/>
+        <rect x="12" y="12" width="10" height="10" fill="#ffb900"/>
+      </svg>
+      Sign in with Microsoft
+    </button>
+    <div id="login-status"><span class="spinner"></span> Initializing…</div>
+  </div>
+</div>
+
+<!-- MAIN APP -->
+<div id="app-screen">
+
+  <div class="page-title">Data Entry</div>
+  <div class="page-sub" id="welcome-sub">Submit entries directly to SharePoint</div>
+
+  <!-- FORM -->
+  <div class="card">
+    <div class="card-title">New Entry</div>
+    <div class="form-grid">
+      <div class="form-group">
+        <label>Title / Item Name *</label>
+        <input type="text" id="f-title" placeholder="e.g. Road Repair Report"/>
+      </div>
+      <div class="form-group">
+        <label>Category *</label>
+        <select id="f-category">
+          <option value="">— Select Category —</option>
+          <option>Infrastructure</option>
+          <option>Water Supply</option>
+          <option>Sanitation</option>
+          <option>Roads</option>
+          <option>Finance</option>
+          <option>General</option>
+        </select>
+      </div>
+      <div class="form-group full">
+        <label>Description</label>
+        <textarea id="f-desc" placeholder="Enter details about this entry…"></textarea>
+      </div>
+    </div>
+    <button class="submit-btn" id="submit-btn" onclick="submitEntry()">
+      <span>💾</span> Save to SharePoint
+    </button>
+  </div>
+
+  <!-- DATA TABLE -->
+  <div class="card">
+    <div class="card-header-row">
+      <div class="card-title">Recent Entries</div>
+      <button class="refresh-btn" onclick="loadEntries()">
+        ↻ Refresh
+      </button>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Title</th>
+            <th>Category</th>
+            <th>Description</th>
+            <th>Submitted By</th>
+            <th>Date</th>
+          </tr>
+        </thead>
+        <tbody id="data-table-body">
+          <tr class="empty-row"><td colspan="6">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+<!-- TOAST CONTAINER -->
+<div class="toast-wrap" id="toast-wrap"></div>
+
+
+<script>
+// ════════════════════════════════════════════════════
+//  ⚙️  CONFIGURATION
+// ════════════════════════════════════════════════════
+const CONFIG = {
+  clientId:  "106f2386-db75-436c-8e08-21c2ea14958e",
+  tenantId:  "e47e4128-1c1b-4510-a440-415145dc1cde",
+  siteUrl:   "https://godavariurban.sharepoint.com/sites/GUMCCSLFDCOMMISTION",
+  listName:  "ProjectData",
+};
+// ════════════════════════════════════════════════════
+
+
+// ── MSAL SETUP ──
+const msalConfig = {
+  auth: {
+    clientId:    CONFIG.clientId,
+    authority:   `https://login.microsoftonline.com/${CONFIG.tenantId}`,
+    redirectUri: "http://localhost:5500/index.html",
+  },
+  cache: { cacheLocation: "localStorage" }
+};
+
+const loginRequest = {
+  scopes: [
+    "User.Read",
+    "Sites.ReadWrite.All",
+  ]
+};
+
+// ── STATE ──
+// Guard: wait for MSAL library to be available
+if (typeof msal === "undefined") {
+  document.getElementById("login-status").textContent = "⚠ MSAL library failed to load. Check your internet connection and refresh.";
+  throw new Error("MSAL library not loaded");
+}
+const msalInstance = new msal.PublicClientApplication(msalConfig);
+let currentUser = null;
+let msalReady = false;
+
+// ── INIT — called on page load ──
+async function init() {
+  const btn    = document.getElementById("signin-btn");
+  const status = document.getElementById("login-status");
+
+  // Safety timeout — if init takes more than 5s, unblock the button anyway
+  const safetyTimer = setTimeout(() => {
+    if (!msalReady) {
+      msalReady = true;
+      btn.disabled = false;
+      status.textContent = "Ready — click to sign in.";
+    }
+  }, 5000);
+
+  try {
+    await msalInstance.initialize();
+    msalReady = true;
+    clearTimeout(safetyTimer);
+
+    // Handle redirect callback — wrap in its own try/catch
+    let response = null;
+    try {
+      response = await msalInstance.handleRedirectPromise();
+    } catch (redirectErr) {
+      console.warn("handleRedirectPromise error:", redirectErr);
+      // Clear stale session data that can cause infinite loops
+      sessionStorage.clear();
+    }
+
+    if (response && response.account) {
+      msalInstance.setActiveAccount(response.account);
+      currentUser = response.account;
+      showApp();
+      return;
+    }
+
+    // Check if already logged in from a previous session
+    const accounts = msalInstance.getAllAccounts();
+    if (accounts.length > 0) {
+      msalInstance.setActiveAccount(accounts[0]);
+      currentUser = accounts[0];
+      showApp();
+      return;
+    }
+
+    // All good — enable the sign-in button
+    btn.disabled = false;
+    status.textContent = "Ready — click the button above to sign in.";
+
+  } catch (err) {
+    clearTimeout(safetyTimer);
+    console.error("MSAL init error:", err);
+    msalReady = true;
+    btn.disabled = false;
+    status.textContent = "⚠ " + err.message + " — try signing in anyway.";
+  }
+}
+
+// ── SIGN IN ──
+async function signIn() {
+  if (!msalReady) {
+    showToast("Still loading, please wait a moment.", "error");
+    return;
+  }
+  const btn = document.getElementById("signin-btn");
+  const status = document.getElementById("login-status");
+  btn.disabled = true;
+  status.innerHTML = `<span class="spinner"></span> Redirecting to Microsoft…`;
+  try {
+    await msalInstance.loginRedirect(loginRequest);
+  } catch (err) {
+    showToast("Login failed: " + err.message, "error");
+    btn.disabled = false;
+    status.textContent = "Sign-in failed. Please try again.";
+  }
+}
+
+// ── SIGN OUT ──
+function signOut() {
+  msalInstance.logoutRedirect({ postLogoutRedirectUri: window.location.origin });
+}
+
+// ── GET ACCESS TOKEN ──
+async function getToken() {
+  try {
+    const result = await msalInstance.acquireTokenSilent({
+      ...loginRequest,
+      account: currentUser,
+    });
+    return result.accessToken;
+  } catch (err) {
+    const result = await msalInstance.acquireTokenPopup(loginRequest);
+    return result.accessToken;
+  }
+}
+
+// ── SHOW APP AFTER LOGIN ──
+function showApp() {
+  document.getElementById("login-screen").style.display = "none";
+  document.getElementById("app-screen").style.display   = "block";
+
+  const name = currentUser.name || currentUser.username;
+  const initials = name.split(" ").map(n=>n[0]).join("").toUpperCase().slice(0,2);
+
+  document.getElementById("welcome-sub").textContent =
+    `Logged in as ${currentUser.username}`;
+
+  document.getElementById("header-right").innerHTML = `
+    <div class="user-chip">
+      <div class="avatar">${initials}</div>
+      ${name}
+    </div>
+    <button class="logout-btn" onclick="signOut()">Sign out</button>
+  `;
+
+  loadEntries();
+}
+
+// ── GET SHAREPOINT SITE ID via Graph ──
+async function getSiteId(token) {
+  const url = new URL(CONFIG.siteUrl);
+  const hostname = url.hostname;
+  const sitePath = url.pathname;
+
+  const res = await fetch(
+    `https://graph.microsoft.com/v1.0/sites/${hostname}:${sitePath}`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  if (!res.ok) throw new Error("Could not fetch site ID. Check your siteUrl.");
+  const data = await res.json();
+  return data.id;
+}
+
+// ── GET LIST ID ──
+async function getListId(token, siteId) {
+  const res = await fetch(
+    `https://graph.microsoft.com/v1.0/sites/${siteId}/lists?$filter=displayName eq '${CONFIG.listName}'`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  const data = await res.json();
+  if (!data.value || data.value.length === 0)
+    throw new Error(`List "${CONFIG.listName}" not found on SharePoint.`);
+  return data.value[0].id;
+}
+
+// ── SUBMIT ENTRY ──
+async function submitEntry() {
+  const title = document.getElementById("f-title").value.trim();
+  const cat   = document.getElementById("f-category").value;
+  const desc  = document.getElementById("f-desc").value.trim();
+
+  if (!title) { showToast("Please enter a title.", "error"); return; }
+  if (!cat)   { showToast("Please select a category.", "error"); return; }
+
+  const btn = document.getElementById("submit-btn");
+  btn.disabled = true;
+  btn.innerHTML = `<span class="spinner"></span> Saving…`;
+
+  try {
+    const token  = await getToken();
+    const siteId = await getSiteId(token);
+    const listId = await getListId(token, siteId);
+
+    const payload = {
+      fields: {
+        Title:       title,
+        Description: desc,
+        Category:    cat,
+        SubmittedBy: currentUser.username,
+      }
+    };
+
+    const res = await fetch(
+      `https://graph.microsoft.com/v1.0/sites/${siteId}/lists/${listId}/items`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      }
+    );
+
+    if (!res.ok) {
+      const errData = await res.json();
+      throw new Error(errData.error?.message || "Failed to save item");
+    }
+
+    showToast("✅ Entry saved to SharePoint!", "success");
+    document.getElementById("f-title").value    = "";
+    document.getElementById("f-category").value = "";
+    document.getElementById("f-desc").value     = "";
+    loadEntries();
+
+  } catch (err) {
+    showToast("Error: " + err.message, "error");
+    console.error(err);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = `<span>💾</span> Save to SharePoint`;
+  }
+}
+
+// ── LOAD ENTRIES FROM SHAREPOINT ──
+async function loadEntries() {
+  const tbody = document.getElementById("data-table-body");
+  tbody.innerHTML = `<tr class="empty-row"><td colspan="6"><span class="spinner"></span> Loading…</td></tr>`;
+
+  try {
+    const token  = await getToken();
+    const siteId = await getSiteId(token);
+    const listId = await getListId(token, siteId);
+
+    const res = await fetch(
+      `https://graph.microsoft.com/v1.0/sites/${siteId}/lists/${listId}/items?expand=fields&$top=50`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+
+    if (!res.ok) { const e = await res.json().catch(()=>({})); throw new Error(e.error?.message || "Failed to load items"); }
+    const data = await res.json();
+
+    if (!data.value || data.value.length === 0) {
+      tbody.innerHTML = `<tr class="empty-row"><td colspan="6">No entries yet. Add your first one above!</td></tr>`;
+      return;
+    }
+
+    tbody.innerHTML = data.value.map((item, i) => {
+      const f    = item.fields;
+      const date = new Date(item.createdDateTime).toLocaleDateString("en-IN", {
+        day: "2-digit", month: "short", year: "numeric"
+      });
+      return `
+        <tr>
+          <td style="color:var(--muted);font-family:'JetBrains Mono',monospace">${i+1}</td>
+          <td style="font-weight:600">${esc(f.Title || "—")}</td>
+          <td><span class="badge">${esc(f.Category || "—")}</span></td>
+          <td style="color:var(--muted);max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(f.Description || "—")}</td>
+          <td style="font-size:0.8rem;color:var(--muted)">${esc(f.SubmittedBy || "—")}</td>
+          <td style="font-size:0.8rem;color:var(--muted)">${date}</td>
+        </tr>`;
+    }).join("");
+
+  } catch (err) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="6" style="color:var(--danger)">⚠ ${esc(err.message)}</td></tr>`;
+  }
+}
+
+// ── HELPERS ──
+function esc(str) {
+  return String(str)
+    .replace(/&/g,"&amp;")
+    .replace(/</g,"&lt;")
+    .replace(/>/g,"&gt;");
+}
+
+function showToast(msg, type="info") {
+  const wrap = document.getElementById("toast-wrap");
+  const t = document.createElement("div");
+  t.className = `toast ${type}`;
+  const icon = type === "success" ? "✅" : type === "error" ? "❌" : "ℹ️";
+  t.innerHTML = `<span>${icon}</span><span>${msg}</span>`;
+  wrap.appendChild(t);
+  setTimeout(() => t.remove(), 4500);
+}
+
+// ── START ──
+init();
+</script>
+
+</body>
+</html>
