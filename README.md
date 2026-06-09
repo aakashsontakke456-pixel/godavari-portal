@@ -1,6 +1,6 @@
-# 🏙️ Godavari Urban — Data Entry Portal
+# 🏙️  Organization  — Data Entry Portal
 
-A production web application built for **Godavari Urban Multistate Credit Co-op Society, Nanded**.
+A production web application built for ** Multistate Credit Co-op Society**.
 
 ## 🔗 Live App
 👉 [Open Portal](https://aakashsontakke456-pixel.github.io/godavari-portal/index.html)
