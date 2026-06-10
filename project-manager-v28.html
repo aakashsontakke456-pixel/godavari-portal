@@ -1953,7 +1953,7 @@ const _msalConfig = {
   auth: {
     clientId:    SP_CONFIG.clientId,
     authority:   `https://login.microsoftonline.com/${SP_CONFIG.tenantId}`,
-    redirectUri: window.location.origin + window.location.pathname,
+    redirectUri: "https://aakashsontakke456-pixel.github.io/godavari-portal/project-manager-v28.html",
   },
   cache: { cacheLocation: "sessionStorage" }
 };
@@ -1971,10 +1971,11 @@ let _msalUser = null;   // Azure AD account object
 async function initMsal() {
   const btn = document.getElementById("msal-signin-btn");
   const status = document.getElementById("msal-status");
+  if(!btn) { console.warn("MSAL: signin btn not found, retrying..."); setTimeout(initMsal, 200); return; }
   const safetyTimer = setTimeout(() => {
     if (!_msalReady) {
       _msalReady = true;
-      btn.disabled = false;
+      if(btn) btn.disabled = false;
       if(status) status.textContent = "Ready — click to sign in.";
     }
   }, 5000);
@@ -2003,7 +2004,7 @@ async function initMsal() {
       return;
     }
     btn.disabled = false;
-    if(status) status.textContent = "Ready — click the button above to sign in.";
+    if(status) status.innerHTML = "Ready — click the button above to sign in.";
   } catch(err) {
     clearTimeout(safetyTimer);
     console.error("MSAL init error:", err);
@@ -2448,6 +2449,7 @@ async function loadUsersFromServer() {
 /* ── Build user dropdown on page load ── */
 function buildUserDropdown() {
   const dd = document.getElementById("userDropdown");
+  if(!dd) return; // element removed in MSAL version — safe to skip
   const groups = {
     admin:     { label: "Administrator", users: [] },
     team:      { label: "Team Members",  users: [] },
@@ -4453,7 +4455,12 @@ document.getElementById("appShell").style.display   = "none";
 
 // Startup: initialize MSAL (handles redirect callback + silent re-login)
 // Users are loaded from Google Sheet inside afterMsalLogin()
-initMsal();
+// Use DOMContentLoaded to ensure all elements exist before MSAL runs
+if(document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", initMsal);
+} else {
+  initMsal();
+}
 
 // loginPass removed — MSAL handles sign-in
 document.getElementById("modalOverlay").addEventListener("click",e=>{ if(e.target===document.getElementById("modalOverlay")) closeModal(); });
