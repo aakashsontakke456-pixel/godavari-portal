@@ -2193,7 +2193,7 @@ function safeFormatDate(dateVal) {
    LOADING OVERLAY — animated steps
 ═══════════════════════════════════════════ */
 const LC_STEPS_FRESH = [
-  { icon:"🔗", msg:"Connecting to Google Sheets…",   pct:"12%" },
+  { icon:"🔗", msg:"Connecting to SharePoint…",      pct:"12%" },
   { icon:"📂", msg:"Loading projects & checklists…", pct:"45%" },
   { icon:"📝", msg:"Fetching meetings & notes…",     pct:"72%" },
   { icon:"🔐", msg:"Applying your permissions…",     pct:"90%" },
@@ -2348,86 +2348,401 @@ function applyDB(db, silent) {
   }
 }
 
-/* ── Pull from Google Sheets (single call, 10 s timeout) ── */
+/* ══════════════════════════════════════════════════════════════
+   SharePoint Graph API helpers
+══════════════════════════════════════════════════════════════ */
+
+// Cache site/list IDs so we don't look them up on every call
+let _spSiteId = null, _spListIds = {};
+
+async function spSiteId() {
+  if(_spSiteId) return _spSiteId;
+  const token = await getMsalToken();
+  const url = SP_CONFIG.siteUrl;
+  const u = new URL(url);
+  const r = await fetch(
+    `https://graph.microsoft.com/v1.0/sites/${u.hostname}:${u.pathname}`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  if(!r.ok) throw new Error("Cannot get site ID: " + await r.text());
+  _spSiteId = (await r.json()).id;
+  return _spSiteId;
+}
+
+async function spListId(listName) {
+  if(_spListIds[listName]) return _spListIds[listName];
+  const token = await getMsalToken();
+  const siteId = await spSiteId();
+  const r = await fetch(
+    `https://graph.microsoft.com/v1.0/sites/${siteId}/lists?$filter=displayName eq '${listName}'`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  if(!r.ok) throw new Error("Cannot get list ID for " + listName);
+  const data = await r.json();
+  if(!data.value || !data.value.length) throw new Error(`List "${listName}" not found`);
+  _spListIds[listName] = data.value[0].id;
+  return _spListIds[listName];
+}
+
+// Generic: get all items from a list (handles paging)
+async function spGetAllItems(listName) {
+  const token = await getMsalToken();
+  const siteId = await spSiteId();
+  const listId = await spListId(listName);
+  let url = `https://graph.microsoft.com/v1.0/sites/${siteId}/lists/${listId}/items?expand=fields&$top=999`;
+  let items = [];
+  while(url) {
+    const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if(!r.ok) throw new Error("spGetAllItems failed: " + await r.text());
+    const data = await r.json();
+    items = items.concat(data.value || []);
+    url = data["@odata.nextLink"] || null;
+  }
+  return items.map(i => i.fields);
+}
+
+// Generic: create item
+async function spCreateItem(listName, fields) {
+  const token = await getMsalToken();
+  const siteId = await spSiteId();
+  const listId = await spListId(listName);
+  const r = await fetch(
+    `https://graph.microsoft.com/v1.0/sites/${siteId}/lists/${listId}/items`,
+    {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ fields })
+    }
+  );
+  if(!r.ok) throw new Error("spCreateItem failed: " + await r.text());
+  return (await r.json()).fields;
+}
+
+// Generic: update item by SharePoint item id
+async function spUpdateItem(listName, spItemId, fields) {
+  const token = await getMsalToken();
+  const siteId = await spSiteId();
+  const listId = await spListId(listName);
+  const r = await fetch(
+    `https://graph.microsoft.com/v1.0/sites/${siteId}/lists/${listId}/items/${spItemId}/fields`,
+    {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify(fields)
+    }
+  );
+  if(!r.ok) throw new Error("spUpdateItem failed: " + await r.text());
+}
+
+// Generic: delete item by SharePoint item id
+async function spDeleteItem(listName, spItemId) {
+  const token = await getMsalToken();
+  const siteId = await spSiteId();
+  const listId = await spListId(listName);
+  const r = await fetch(
+    `https://graph.microsoft.com/v1.0/sites/${siteId}/lists/${listId}/items/${spItemId}`,
+    { method: "DELETE", headers: { Authorization: `Bearer ${token}` } }
+  );
+  if(!r.ok && r.status !== 404) throw new Error("spDeleteItem failed: " + await r.text());
+}
+
+// Find SharePoint item id by Title field
+async function spFindByTitle(listName, title) {
+  const token = await getMsalToken();
+  const siteId = await spSiteId();
+  const listId = await spListId(listName);
+  const r = await fetch(
+    `https://graph.microsoft.com/v1.0/sites/${siteId}/lists/${listId}/items?expand=fields&$filter=fields/Title eq '${encodeURIComponent(title)}'&$top=1`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  if(!r.ok) return null;
+  const data = await r.json();
+  return data.value && data.value.length ? data.value[0] : null;
+}
+
+// Upsert: create if not exists, update if exists (matched by Title)
+async function spUpsert(listName, title, fields) {
+  const existing = await spFindByTitle(listName, title);
+  if(existing) {
+    await spUpdateItem(listName, existing.id, fields);
+  } else {
+    await spCreateItem(listName, { Title: title, ...fields });
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════
+   DATA MAPPING — app objects ↔ SharePoint fields
+══════════════════════════════════════════════════════════════ */
+
+function projectToSP(p) {
+  return {
+    ProjectName:  p.name  || "",
+    Description:  p.desc  || "",
+    AppType:      p.type  || "Canvas App",
+    Status:       p.status|| "Planning",
+    Priority:     p.priority || "High",
+    Environment:  p.env   || "Development",
+    Owner:        p.owner || "",
+    Team:         p.team  || "",
+    StartDate:    p.start || null,
+    TargetDate:   p.target|| null,
+    SpUrl:        p.spUrl || "",
+    CreatedAt:    p.createdAt || new Date().toISOString()
+  };
+}
+
+function spToProject(f) {
+  return {
+    id:        f.Title,
+    name:      f.ProjectName  || f.Title,
+    desc:      f.Description  || "",
+    type:      f.AppType      || "Canvas App",
+    status:    f.Status       || "Planning",
+    priority:  f.Priority     || "High",
+    env:       f.Environment  || "Development",
+    owner:     f.Owner        || "",
+    team:      f.Team         || "",
+    start:     f.StartDate    ? f.StartDate.split("T")[0] : "",
+    target:    f.TargetDate   ? f.TargetDate.split("T")[0] : "",
+    spUrl:     f.SpUrl        || "",
+    createdAt: f.CreatedAt    || ""
+  };
+}
+
+/* ── Pull from SharePoint ── */
 async function syncFromServer(silent) {
-  if(notConfigured) { setSyncUI("offline","Paste Script URL"); return false; }
+  if(!_msalUser) { setSyncUI("offline","Not signed in"); return false; }
   if(!silent) setSyncUI("saving","Syncing…");
   try {
-    const r = await fetch(SCRIPT_URL+"?action=db", {signal:makeSignal(10000)});
-    if(!r.ok) throw new Error("HTTP "+r.status);
-    const db = await r.json();
+    // Load all lists in parallel
+    const [projItems, clItems, meetItems, noteItems, docItems, ncItems] = await Promise.all([
+      spGetAllItems(SP_CONFIG.lists.projects),
+      spGetAllItems(SP_CONFIG.lists.checklist),
+      spGetAllItems(SP_CONFIG.lists.meetings),
+      spGetAllItems(SP_CONFIG.lists.notes),
+      spGetAllItems(SP_CONFIG.lists.docs),
+      spGetAllItems(SP_CONFIG.lists.naissance)
+    ]);
+
+    // Projects
+    const projects = projItems.map(spToProject);
+
+    // Checklist: { [projectId]: { [checkKey]: true/false } }
+    const checklist = {};
+    clItems.forEach(f => {
+      const pid = f.ProjectId || "";
+      if(!checklist[pid]) checklist[pid] = {};
+      if(f.CheckKey) checklist[pid][f.CheckKey] = !!f.CheckValue;
+    });
+
+    // Meetings: { [projectId]: { [phaseNum]: [...] } }
+    const meetings = {};
+    meetItems.forEach(f => {
+      const pid = f.ProjectId || "";
+      const ph  = String(f.PhaseNum || "1");
+      if(!meetings[pid]) meetings[pid] = {};
+      if(!meetings[pid][ph]) meetings[pid][ph] = [];
+      meetings[pid][ph].push({
+        id:       f.Title,
+        date:     f.MeetingDate ? f.MeetingDate.split("T")[0] : "",
+        duration: f.Duration || 0,
+        title:    f.MeetingTitle || "",
+        notes:    f.Notes || "",
+        attendees:f.Attendees || "",
+        addedBy:  f.AddedBy || "",
+        addedAt:  f.AddedAt || ""
+      });
+    });
+
+    // Notes: { [projectId]: { [phaseNum]: [...] } }
+    const notes = {};
+    noteItems.forEach(f => {
+      const pid = f.ProjectId || "";
+      const ph  = String(f.PhaseNum || "1");
+      if(!notes[pid]) notes[pid] = {};
+      if(!notes[pid][ph]) notes[pid][ph] = [];
+      notes[pid][ph].push({
+        id:      f.Title,
+        text:    f.NoteText || "",
+        addedBy: f.AddedBy || "",
+        addedAt: f.AddedAt || ""
+      });
+    });
+
+    // Docs: { [projectId]: [...] }
+    const docs = {};
+    docItems.forEach(f => {
+      const pid = f.ProjectId || "";
+      if(!docs[pid]) docs[pid] = [];
+      docs[pid].push({
+        id:        f.Title,
+        title:     f.DocTitle   || "Untitled",
+        type:      f.DocType    || "Other",
+        content:   f.Content    || "",
+        createdBy: f.CreatedBy  || "",
+        createdAt: f.CreatedAt  || "",
+        updatedBy: f.UpdatedBy  || "",
+        updatedAt: f.UpdatedAt  || ""
+      });
+    });
+
+    // Naissance: { [projectId]: { ...data } }
+    const naissance = {};
+    ncItems.forEach(f => {
+      const pid = f.Title || "";
+      try {
+        naissance[pid] = f.NaissanceData ? JSON.parse(f.NaissanceData) : {};
+        naissance[pid].projectName = f.ProjectName || pid;
+        naissance[pid].lastUpdated = f.LastUpdated || "";
+      } catch { naissance[pid] = {}; }
+    });
+
+    const db = { projects, checklist, meetings, notes, docs, naissance };
     serverOK = true;
     saveDBCache(db);
     applyDB(db, silent);
-    setSyncUI("connected","☁ Google Sheets ✓");
+    setSyncUI("connected","☁ SharePoint ✓");
     return true;
-  } catch {
+  } catch(err) {
     serverOK = false;
-    setSyncUI("offline","Offline — showing cached data");
+    console.error("syncFromServer error:", err);
+    setSyncUI("offline","Sync failed — " + err.message.slice(0,40));
     return false;
   }
 }
 
-/* ── Push to Google Sheets ── */
+/* ── Push entire app state to SharePoint ── */
 async function pushAll() {
-  if(notConfigured) return;
+  if(!_msalUser) return;
   setSyncUI("saving","Saving…");
+  // Update local cache immediately
   const db = { projects:_projects, checklist:_checklist, meetings:_meetings, notes:_notes, docs:_docs, naissance:_nc };
-  saveDBCache(db); // update local cache immediately so re-login is instant
+  saveDBCache(db);
   try {
-    await fetch(SCRIPT_URL, {
-      method:"POST", mode:"no-cors",
-      headers:{"Content-Type":"text/plain"},
-      body: JSON.stringify(db)
-    });
+    await spPushAll(db);
     serverOK = true;
-    _pendingPush = false;                     // safe to accept syncs again
+    _pendingPush = false;
     setSyncUI("connected","☁ Saved ✓");
-    setTimeout(()=>setSyncUI("connected","☁ Google Sheets ✓"), 2500);
-  } catch {
+    setTimeout(()=>setSyncUI("connected","☁ SharePoint ✓"), 2500);
+  } catch(err) {
     serverOK = false;
-    _pendingPush = false;                     // don't block sync forever on error
-    setSyncUI("offline","Save failed — will retry");
+    _pendingPush = false;
+    console.error("pushAll error:", err);
+    setSyncUI("offline","Save failed — " + err.message.slice(0,40));
   }
 }
 
-/* ── Keep-alive: ping every 8 min so Apps Script never cold-starts ── */
+/* ── Write full DB to SharePoint lists ── */
+async function spPushAll(db) {
+  // Projects
+  for(const p of (db.projects || [])) {
+    await spUpsert(SP_CONFIG.lists.projects, p.id, projectToSP(p));
+  }
+
+  // Checklist: flatten to rows
+  for(const [pid, phaseMap] of Object.entries(db.checklist || {})) {
+    for(const [checkKey, checkVal] of Object.entries(phaseMap || {})) {
+      const rowKey = `${pid}_${checkKey}`;
+      await spUpsert(SP_CONFIG.lists.checklist, rowKey, {
+        ProjectId:  pid,
+        CheckKey:   checkKey,
+        CheckValue: !!checkVal
+      });
+    }
+  }
+
+  // Meetings
+  for(const [pid, phases] of Object.entries(db.meetings || {})) {
+    for(const [phaseNum, list] of Object.entries(phases || {})) {
+      for(const m of (list || [])) {
+        await spUpsert(SP_CONFIG.lists.meetings, m.id, {
+          ProjectId:    pid,
+          PhaseNum:     parseInt(phaseNum) || 1,
+          MeetingDate:  m.date   || null,
+          Duration:     m.duration || 0,
+          MeetingTitle: m.title  || "",
+          Notes:        m.notes  || "",
+          Attendees:    m.attendees || "",
+          AddedBy:      m.addedBy  || "",
+          AddedAt:      m.addedAt  || new Date().toISOString()
+        });
+      }
+    }
+  }
+
+  // Notes
+  for(const [pid, phases] of Object.entries(db.notes || {})) {
+    for(const [phaseNum, list] of Object.entries(phases || {})) {
+      for(const n of (list || [])) {
+        await spUpsert(SP_CONFIG.lists.notes, n.id, {
+          ProjectId: pid,
+          PhaseNum:  parseInt(phaseNum) || 1,
+          NoteText:  n.text    || "",
+          AddedBy:   n.addedBy || "",
+          AddedAt:   n.addedAt || new Date().toISOString()
+        });
+      }
+    }
+  }
+
+  // Docs
+  for(const [pid, list] of Object.entries(db.docs || {})) {
+    for(const d of (list || [])) {
+      await spUpsert(SP_CONFIG.lists.docs, d.id, {
+        ProjectId: pid,
+        DocTitle:  d.title     || "Untitled",
+        DocType:   d.type      || "Other",
+        Content:   d.content   || "",
+        CreatedBy: d.createdBy || "",
+        CreatedAt: d.createdAt || new Date().toISOString(),
+        UpdatedBy: d.updatedBy || "",
+        UpdatedAt: d.updatedAt || new Date().toISOString()
+      });
+    }
+  }
+
+  // Naissance
+  for(const [pid, data] of Object.entries(db.naissance || {})) {
+    await spUpsert(SP_CONFIG.lists.naissance, pid, {
+      ProjectName:   data.projectName || pid,
+      LastUpdated:   data.lastUpdated || new Date().toISOString(),
+      NaissanceData: JSON.stringify(data)
+    });
+  }
+}
+
+/* ── Keep-alive: refresh MSAL token every 8 min to prevent expiry ── */
 async function keepAlive() {
-  if(notConfigured || !currentUser) return;
-  try { await fetch(SCRIPT_URL+"?action=status", {signal:makeSignal(8000)}); } catch {}
+  if(!_msalUser) return;
+  try { await getMsalToken(); } catch(e) { console.warn("Token refresh failed:", e); }
 }
 setInterval(keepAlive, 8 * 60 * 1000);   // 8 minutes
 
 /* ── Background auto-sync every 30 s — keeps all team members in sync ── */
-setInterval(()=>{ if(serverOK && currentUser) syncFromServer(true); }, 30000);
+setInterval(()=>{ if(serverOK && currentUser && _msalUser) syncFromServer(true); }, 30000);
 
 // ═══════════════════════════════════════════
-// Load users from Google Sheet — primary source of credentials
-// Called at startup; login screen is shown only after this resolves
+// Load users from SharePoint PM_Users list
+// Called inside afterMsalLogin()
 // ═══════════════════════════════════════════
 async function loadUsersFromServer() {
-  if(notConfigured) return;
   try {
-    const r = await fetch(SCRIPT_URL+"?action=users", {signal:makeSignal(12000)});
-    if(!r.ok) throw new Error("HTTP "+r.status);
-    const list = await r.json();
-    if(Array.isArray(list) && list.length) {
-      // Replace USERS entirely with Sheet data (Sheet is single source of truth)
+    const items = await spGetAllItems(SP_CONFIG.lists.users);
+    if(items && items.length) {
       USERS.length = 0;
-      list.forEach(su => USERS.push({
-        u:    String(su.u    || ""),
-        p:    String(su.p    || ""),
-        name: String(su.name || su.u || ""),
-        role: String(su.role || "team")
+      items.forEach(f => USERS.push({
+        u:    String(f.Title       || f.Email || ""),
+        name: String(f.DisplayName || f.Title || ""),
+        role: String(f.Role        || "team"),
+        email:String(f.Email       || f.Title || ""),
+        p:    ""   // no passwords — MSAL handles auth
       }));
-      // Refresh _people from server data so People Manager stays in sync
-      _people = USERS.map(u => ({ u:u.u, name:u.name, p:u.p, role:u.role }));
+      _people = USERS.map(u => ({ ...u }));
       savePeople(_people);
-      buildUserDropdown();
     }
   } catch(err) {
-    console.warn("⚠️ Could not load users from Google Sheet:", err);
-    // Fallback: try localStorage cache so app still works offline
+    console.warn("⚠️ Could not load users from SharePoint PM_Users:", err);
+    // Fallback to localStorage cache
     const cached = localStorage.getItem(PEOPLE_KEY);
     if(cached) {
       try {
@@ -2438,7 +2753,6 @@ async function loadUsersFromServer() {
         }
       } catch {}
     }
-    buildUserDropdown();
   }
 }
 
@@ -4377,24 +4691,19 @@ async function saveEditUser() {
 //  Called automatically after every Add / Remove in People Manager
 // ════════════════════════════════════════════════════════════════════════════
 async function pushUsersToSheet(newUserInfo) {
-  if(notConfigured) return;
+  // Save users to SharePoint PM_Users list
   try {
-    await fetch(SCRIPT_URL, {
-      method: "POST",
-      mode: "no-cors",
-      headers: { "Content-Type": "text/plain" },
-      body: JSON.stringify({
-        action: "saveUsers",
-        users: _people,
-        newUserEmail: newUserInfo || null,
-        updatedBy: currentUser ? currentUser.name : "Admin"
-      }),
-      signal: makeSignal(12000)
-    });
-    // no-cors means we can't read response, but if no error was thrown it went through
+    for(const person of _people) {
+      const email = person.email || person.u || "";
+      await spUpsert(SP_CONFIG.lists.users, email, {
+        DisplayName: person.name || "",
+        Role:        person.role || "team",
+        Email:       email
+      });
+    }
   } catch(err) {
-    console.warn("⚠️ Could not sync users to Google Sheet:", err);
-    showToast("⚠️ Saved locally — Sheet sync failed. Try again.");
+    console.warn("⚠️ Could not sync users to SharePoint:", err);
+    showToast("⚠️ Saved locally — SharePoint sync failed. Try again.");
   }
 }
 
