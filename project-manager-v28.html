@@ -2054,19 +2054,35 @@ async function afterMsalLogin() {
   await loadUsersFromServer();
   syncPeopleToUsers();
 
-  // Find matching user in USERS list by email or username match
-  let matched = USERS.find(u =>
+  // Find matching user in PM_Users list by email
+  const matched = USERS.find(u =>
     (u.email && u.email.toLowerCase() === email) ||
-    (u.u && u.u.toLowerCase() === email) ||
-    (u.u && email.startsWith(u.u.toLowerCase()))
+    (u.u && u.u.toLowerCase() === email)
   );
 
+  // ── BLOCK: user not in PM_Users list ──
   if(!matched) {
-    // Auto-create user record for new Azure AD logins (default: team role)
-    matched = { u: email, name: displayName, role: "team", email: email, p: "" };
-    USERS.push(matched);
-    _people.push(matched);
-    savePeople(_people);
+    // Sign out from MSAL
+    _msalUser = null;
+    if(_msalInstance) {
+      try { await _msalInstance.logoutRedirect({ postLogoutRedirectUri: window.location.href }); }
+      catch(e) { sessionStorage.clear(); }
+    }
+    // Show login screen with error
+    document.getElementById("appShell").style.display = "none";
+    document.getElementById("loginScreen").style.display = "flex";
+    const errEl = document.getElementById("loginError");
+    if(errEl) {
+      errEl.style.display = "block";
+      errEl.innerHTML = `❌ Access Denied<br><small style="font-size:11px;opacity:.8;">
+        <b>${email}</b> is not authorised to use this app.<br>
+        Contact your admin to get access.</small>`;
+    }
+    const statusEl = document.getElementById("msal-status");
+    if(statusEl) statusEl.textContent = "";
+    const btn = document.getElementById("msal-signin-btn");
+    if(btn) { btn.disabled = false; btn.textContent = "Try a different account"; }
+    return;
   }
 
   // Set currentUser (compatible with existing PM app structure)
@@ -2378,18 +2394,53 @@ async function spListId(listName) {
   if(_spListIds[listName]) return _spListIds[listName];
   const token = await getMsalToken();
   const siteId = await spSiteId();
+  // Use list name directly in URL path — more reliable than $filter
   const r = await fetch(
-    `https://graph.microsoft.com/v1.0/sites/${siteId}/lists?$filter=displayName eq '${listName}'`,
+    `https://graph.microsoft.com/v1.0/sites/${siteId}/lists/${encodeURIComponent(listName)}`,
     { headers: { Authorization: `Bearer ${token}` } }
   );
-  if(!r.ok) throw new Error("Cannot get list ID for " + listName);
+  if(!r.ok) throw new Error(`List "${listName}" not found (${r.status}): ` + await r.text());
   const data = await r.json();
-  if(!data.value || !data.value.length) throw new Error(`List "${listName}" not found`);
-  _spListIds[listName] = data.value[0].id;
+  _spListIds[listName] = data.id;
   return _spListIds[listName];
 }
 
+// Deduplicate a SharePoint list — keeps latest item per Title, deletes older dupes
+async function spDeduplicateList(listName) {
+  const token = await getMsalToken();
+  const siteId = await spSiteId();
+  const listId = await spListId(listName);
+  let url = `https://graph.microsoft.com/v1.0/sites/${siteId}/lists/${listId}/items?expand=fields&$select=id,fields/Title,fields/Created&$top=999`;
+  let items = [];
+  while(url) {
+    const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if(!r.ok) return;
+    const data = await r.json();
+    items = items.concat(data.value || []);
+    url = data["@odata.nextLink"] || null;
+  }
+  // Group by Title
+  const byTitle = {};
+  items.forEach(i => {
+    const t = i.fields?.Title || "";
+    if(!byTitle[t]) byTitle[t] = [];
+    byTitle[t].push(i);
+  });
+  // Delete all but the LAST (highest id) per title
+  for(const [title, group] of Object.entries(byTitle)) {
+    if(group.length <= 1) continue;
+    // Sort by numeric id ascending, keep last
+    group.sort((a,b) => parseInt(a.id)-parseInt(b.id));
+    const toDelete = group.slice(0, -1); // all except last
+    for(const item of toDelete) {
+      await spDeleteItem(listName, item.id);
+      console.log(`🗑 Deleted duplicate ${listName}["${title}"] id=${item.id}`);
+    }
+  }
+}
+
 // Generic: get all items from a list (handles paging)
+// Also populates _spItemCache so upsert knows existing item IDs
 async function spGetAllItems(listName) {
   const token = await getMsalToken();
   const siteId = await spSiteId();
@@ -2403,10 +2454,17 @@ async function spGetAllItems(listName) {
     items = items.concat(data.value || []);
     url = data["@odata.nextLink"] || null;
   }
+  // Populate item cache so spUpsert knows existing IDs — prevents duplicates
+  if(!_spItemCache[listName]) _spItemCache[listName] = {};
+  items.forEach(i => {
+    if(i.fields && i.fields.Title) {
+      _spItemCache[listName][i.fields.Title] = i.id;
+    }
+  });
   return items.map(i => i.fields);
 }
 
-// Generic: create item
+// Generic: create item — returns full item (including SharePoint item id)
 async function spCreateItem(listName, fields) {
   const token = await getMsalToken();
   const siteId = await spSiteId();
@@ -2420,7 +2478,7 @@ async function spCreateItem(listName, fields) {
     }
   );
   if(!r.ok) throw new Error("spCreateItem failed: " + await r.text());
-  return (await r.json()).fields;
+  return await r.json(); // return full item, not just fields
 }
 
 // Generic: update item by SharePoint item id
@@ -2467,13 +2525,26 @@ async function spFindByTitle(listName, title) {
   return data.value && data.value.length ? data.value[0] : null;
 }
 
+// Item ID cache: listName -> { title -> spItemId }
+const _spItemCache = {};
+
 // Upsert: create if not exists, update if exists (matched by Title)
 async function spUpsert(listName, title, fields) {
+  // Check memory cache first (fastest)
+  if(!_spItemCache[listName]) _spItemCache[listName] = {};
+  const cached = _spItemCache[listName][title];
+  if(cached) {
+    await spUpdateItem(listName, cached, fields);
+    return;
+  }
+  // Search SharePoint for existing item
   const existing = await spFindByTitle(listName, title);
   if(existing) {
+    _spItemCache[listName][title] = existing.id; // cache it
     await spUpdateItem(listName, existing.id, fields);
   } else {
-    await spCreateItem(listName, { Title: title, ...fields });
+    const created = await spCreateItem(listName, { Title: title, ...fields });
+    if(created && created.id) _spItemCache[listName][title] = created.id;
   }
 }
 
@@ -2524,6 +2595,11 @@ async function syncFromServer(silent) {
     // Verify site connection first
     await spSiteId();
     if(!silent) setSyncUI("saving","Loading data…");
+    // Clean up any duplicates from previous bug (runs silently)
+    if(!window._dedupDone) {
+      window._dedupDone = true;
+      spDeduplicateList(SP_CONFIG.lists.projects).catch(()=>{});
+    }
     // Load all lists in parallel
     const [projItems, clItems, meetItems, noteItems, docItems, ncItems] = await Promise.all([
       spGetAllItems(SP_CONFIG.lists.projects),
