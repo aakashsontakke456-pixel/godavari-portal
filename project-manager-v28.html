@@ -1937,7 +1937,7 @@ const notConfigured = !SCRIPT_URL || SCRIPT_URL === "YOUR_APPS_SCRIPT_URL";
 const SP_CONFIG = {
   clientId:  "106f2386-db75-436c-8e08-21c2ea14958e",
   tenantId:  "e47e4128-1c1b-4510-a440-415145dc1cde",
-  siteUrl:   "https://godavariurban.sharepoint.com/sites/GUMCCSLFIDCOMMISTION",
+  siteUrl:   "https://godavariurban.sharepoint.com/sites/GUMCCSLFDCOMMISTION",
   lists: {
     projects:  "PM_Projects",
     checklist: "PM_Checklist",
@@ -2358,14 +2358,19 @@ let _spSiteId = null, _spListIds = {};
 async function spSiteId() {
   if(_spSiteId) return _spSiteId;
   const token = await getMsalToken();
-  const url = SP_CONFIG.siteUrl;
-  const u = new URL(url);
+  const u = new URL(SP_CONFIG.siteUrl);
+  // Correct Graph API format: hostname:/sites/sitename
   const r = await fetch(
-    `https://graph.microsoft.com/v1.0/sites/${u.hostname}:${u.pathname}`,
+    `https://graph.microsoft.com/v1.0/sites/${u.hostname}:${u.pathname}:`,
     { headers: { Authorization: `Bearer ${token}` } }
   );
-  if(!r.ok) throw new Error("Cannot get site ID: " + await r.text());
-  _spSiteId = (await r.json()).id;
+  if(!r.ok) {
+    const errText = await r.text();
+    throw new Error("Cannot get site ID: " + errText);
+  }
+  const data = await r.json();
+  _spSiteId = data.id;
+  console.log("✅ SharePoint site ID:", _spSiteId);
   return _spSiteId;
 }
 
@@ -2451,8 +2456,10 @@ async function spFindByTitle(listName, title) {
   const token = await getMsalToken();
   const siteId = await spSiteId();
   const listId = await spListId(listName);
+  // Use proper OData filter — Title is always the internal field name in SharePoint
+  const filter = `fields/Title eq '${title.replace(/'/g, "''")}'`;
   const r = await fetch(
-    `https://graph.microsoft.com/v1.0/sites/${siteId}/lists/${listId}/items?expand=fields&$filter=fields/Title eq '${encodeURIComponent(title)}'&$top=1`,
+    `https://graph.microsoft.com/v1.0/sites/${siteId}/lists/${listId}/items?expand=fields&$filter=${encodeURIComponent(filter)}&$top=1`,
     { headers: { Authorization: `Bearer ${token}` } }
   );
   if(!r.ok) return null;
@@ -2512,8 +2519,11 @@ function spToProject(f) {
 /* ── Pull from SharePoint ── */
 async function syncFromServer(silent) {
   if(!_msalUser) { setSyncUI("offline","Not signed in"); return false; }
-  if(!silent) setSyncUI("saving","Syncing…");
+  if(!silent) setSyncUI("saving","Connecting to SharePoint…");
   try {
+    // Verify site connection first
+    await spSiteId();
+    if(!silent) setSyncUI("saving","Loading data…");
     // Load all lists in parallel
     const [projItems, clItems, meetItems, noteItems, docItems, ncItems] = await Promise.all([
       spGetAllItems(SP_CONFIG.lists.projects),
@@ -2602,11 +2612,13 @@ async function syncFromServer(silent) {
     saveDBCache(db);
     applyDB(db, silent);
     setSyncUI("connected","☁ SharePoint ✓");
+    console.log("✅ SharePoint sync complete");
     return true;
   } catch(err) {
     serverOK = false;
     console.error("syncFromServer error:", err);
-    setSyncUI("offline","Sync failed — " + err.message.slice(0,40));
+    setSyncUI("offline","Sync failed — " + (err.message||"unknown").slice(0,50));
+    showToast("❌ SharePoint Sync Error: " + (err.message||"unknown"));
     return false;
   }
 }
@@ -2628,7 +2640,8 @@ async function pushAll() {
     serverOK = false;
     _pendingPush = false;
     console.error("pushAll error:", err);
-    setSyncUI("offline","Save failed — " + err.message.slice(0,40));
+    setSyncUI("offline","Save failed — " + (err.message||"unknown").slice(0,50));
+    showToast("❌ SharePoint Save Error: " + (err.message||"unknown"));
   }
 }
 
