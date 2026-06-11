@@ -2095,12 +2095,17 @@ function accessDeniedGoBack() {
   _msalUser = null;
   _msalInstance = null;
   _msalReady = false;
-  // Hide overlay and show login screen
+  // Hide real overlay — remove BOTH style AND class (both are set by showAccessDeniedPopup)
   const overlay = document.getElementById("accessDeniedOverlay");
-  if(overlay) overlay.style.display = "none";
-  document.querySelectorAll("[style]").forEach(el => {
-    if(el.style.display === "none" && (el.id === "loginScreen")) el.style.display = "flex";
-  });
+  if(overlay) {
+    overlay.style.display = "none";
+    overlay.classList.remove("open");
+  }
+  // Also remove any injected fallback overlay div (no id — find by z-index style)
+  document.querySelectorAll("body > div[style*='z-index:999999']").forEach(el => el.remove());
+  // Show app shell and login screen
+  const appShell = document.getElementById("appShell");
+  if(appShell) appShell.style.display = "";
   const loginScreen = document.getElementById("loginScreen");
   if(loginScreen) loginScreen.style.display = "flex";
   const btn = document.getElementById("msal-signin-btn");
@@ -2935,11 +2940,14 @@ async function pushAll() {
 /* ── Write full DB to SharePoint lists ── */
 async function spPushAll(db) {
   // Projects
+  try {
   for(const p of (db.projects || [])) {
     await spUpsert(SP_CONFIG.lists.projects, p.id, projectToSP(p));
   }
+  } catch(e) { console.warn("spPushAll: projects failed:", e.message); }
 
   // Checklist: flatten to rows
+  try {
   for(const [pid, phaseMap] of Object.entries(db.checklist || {})) {
     for(const [checkKey, checkVal] of Object.entries(phaseMap || {})) {
       const rowKey = `${pid}_${checkKey}`;
@@ -2950,8 +2958,10 @@ async function spPushAll(db) {
       });
     }
   }
+  } catch(e) { console.warn("spPushAll: checklist failed:", e.message); }
 
   // Meetings
+  try {
   for(const [pid, phases] of Object.entries(db.meetings || {})) {
     for(const [phaseNum, list] of Object.entries(phases || {})) {
       for(const m of (list || [])) {
@@ -2969,8 +2979,10 @@ async function spPushAll(db) {
       }
     }
   }
+  } catch(e) { console.warn("spPushAll: meetings failed:", e.message); }
 
   // Notes
+  try {
   for(const [pid, phases] of Object.entries(db.notes || {})) {
     for(const [phaseNum, list] of Object.entries(phases || {})) {
       for(const n of (list || [])) {
@@ -2984,8 +2996,10 @@ async function spPushAll(db) {
       }
     }
   }
+  } catch(e) { console.warn("spPushAll: notes failed:", e.message); }
 
   // Docs
+  try {
   for(const [pid, list] of Object.entries(db.docs || {})) {
     for(const d of (list || [])) {
       await spUpsert(SP_CONFIG.lists.docs, d.id, {
@@ -3000,8 +3014,10 @@ async function spPushAll(db) {
       });
     }
   }
+  } catch(e) { console.warn("spPushAll: docs failed:", e.message); }
 
   // Naissance — store clean {date, items} object only
+  try {
   for(const [pid, data] of Object.entries(db.naissance || {})) {
     if(!data || !Array.isArray(data.items)) continue; // skip if corrupt
     const cleanData = { date: data.date, items: data.items };
@@ -3011,6 +3027,7 @@ async function spPushAll(db) {
       NaissanceData: JSON.stringify(cleanData)
     });
   }
+  } catch(e) { console.warn("spPushAll: naissance failed:", e.message); }
 }
 
 /* ── Keep-alive: refresh MSAL token every 8 min to prevent expiry ── */
@@ -3587,7 +3604,7 @@ function closeModal() { document.getElementById("modalOverlay").classList.remove
 async function saveProject() {
   if(_isSaving) { showToast("⏳ Save in progress, please wait..."); return; }
   _isSaving = true;
-  setTimeout(()=>{ _isSaving=false; }, 8000); // auto-release after 8s
+  try {
   const name = document.getElementById("fName").value.trim();
   if(!name){ showToast("⚠️ Project name required!"); return; }
   // Get selected leader name
@@ -3614,6 +3631,12 @@ async function saveProject() {
   refreshAllViews();
   showToast('✅ Project "'+name+'" created!');
   await pushAll();
+  } catch(err) {
+    console.error("saveProject", err);
+    showToast("❌ Save failed: " + err.message);
+  } finally {
+    _isSaving = false;
+  }
 }
 
 async function delProject(pid) {
@@ -5445,7 +5468,7 @@ async function saveEditProject() {
   p.team     = _epMsSelected.map(u => { const pp = _people.find(q=>q.u===u); return pp ? pp.name : u; }).join(", ");
   p.spUrl    = document.getElementById("epSpUrl").value.trim();
   p.updatedAt= new Date().toISOString();
-  p.updatedBy= currentUser.name;
+  p.updatedBy= currentUser ? currentUser.name : "Unknown";
 
   closeEditProject();
   refreshAllViews();
@@ -5735,12 +5758,12 @@ function renderNCBody(pid) {
         rows += `<tr class="nc-edit-row">
           <td class="nc-sr" rowspan="${si===0?subsLen:0}" style="${si>0?'display:none':''}">${si===0?`<span>${srNo++}</span>`+`<br><button class="nc-del-btn" onclick="ncDeleteCat(${ci})" title="Delete category">🗑</button>`:""}</td>
           <td style="${si>0?'':''}">
-            ${si===0?`<input class="nc-edit-input" value="${x(cat.cat.replace(/\n/g,' '))}" oninput="ncUpdateCat(${ci},this.value)" placeholder="Category name">`:
+            ${si===0?`<input class="nc-edit-input" data-ci="${ci}" value="${x(cat.cat.replace(/\n/g,' '))}" oninput="ncUpdateCat(${ci},this.value)" placeholder="Category name">`:
             `<span style="padding-left:12px;color:var(--text3);font-size:12px;">↳</span>`}
           </td>
           <td>
             <div style="display:flex;align-items:center;gap:6px;">
-              <input class="nc-edit-input" value="${x(sub.name)}" oninput="ncUpdateSub(${ci},${si},this.value)" placeholder="Subcategory" style="flex:1;">
+              <input class="nc-edit-input" data-ci="${ci}" data-si="${si}" value="${x(sub.name)}" oninput="ncUpdateSub(${ci},${si},this.value)" placeholder="Subcategory" style="flex:1;">
               <button class="nc-del-btn" onclick="ncDeleteSub(${ci},${si})">✕</button>
             </div>
           </td>
@@ -5835,6 +5858,7 @@ async function ncToggle(ci, si) {
 
 function toggleNcEditMode() {
   if(!_ncPID || !canEditProjectId(_ncPID)) { showToast("🔐 Higher Authority has view-only access"); return; }
+  ncFlushInputs(); // always save current input state before mode switch
   _ncEditMode = !_ncEditMode;
   const btn = document.getElementById("ncEditToggleBtn");
   const saveBtn = document.getElementById("ncSaveBtn");
@@ -5844,40 +5868,66 @@ function toggleNcEditMode() {
   renderNCBody(_ncPID);
 }
 
+function ncFlushInputs() {
+  // Read all live input values from DOM into _nc before any re-render
+  // This prevents data loss when renderNCBody wipes the DOM
+  if(!_ncPID) return;
+  const nc = getNC(_ncPID);
+  document.querySelectorAll(".nc-edit-input[data-ci]").forEach(input => {
+    const ci = parseInt(input.dataset.ci);
+    const si = input.dataset.si !== undefined ? parseInt(input.dataset.si) : null;
+    if(isNaN(ci)) return;
+    if(si === null) {
+      // Category input
+      if(nc.items[ci]) nc.items[ci].cat = input.value;
+    } else {
+      // Subcategory input
+      if(nc.items[ci] && nc.items[ci].subs[si]) nc.items[ci].subs[si].name = input.value;
+    }
+  });
+}
 function ncUpdateCat(ci, val) {
   if(!_ncPID || !canEditProjectId(_ncPID)) return;
   const nc = getNC(_ncPID);
-  nc.items[ci].cat = val;
+  if(nc.items[ci]) nc.items[ci].cat = val;
 }
 function ncUpdateSub(ci, si, val) {
   if(!_ncPID || !canEditProjectId(_ncPID)) return;
   const nc = getNC(_ncPID);
-  nc.items[ci].subs[si].name = val;
+  if(nc.items[ci] && nc.items[ci].subs[si]) nc.items[ci].subs[si].name = val;
 }
 function ncAddSub(ci) {
   if(!_ncPID || !canEditProjectId(_ncPID)) return;
+  ncFlushInputs(); // save all current input values before re-render
   const nc = getNC(_ncPID);
   nc.items[ci].subs.push({ name: "New Item", checked: false, checkedBy: null, checkedAt: null });
+  saveNCLocal();
   renderNCBody(_ncPID);
 }
 function ncDeleteSub(ci, si) {
   if(!_ncPID || !canEditProjectId(_ncPID)) return;
+  ncFlushInputs(); // save all current input values before re-render
   const nc = getNC(_ncPID);
   if(nc.items[ci].subs.length <= 1) { showToast("⚠️ Each category must have at least one subcategory"); return; }
   nc.items[ci].subs.splice(si, 1);
+  saveNCLocal();
   renderNCBody(_ncPID);
 }
 function ncAddCat() {
   if(!_ncPID || !canEditProjectId(_ncPID)) return;
+  ncFlushInputs();
   const nc = getNC(_ncPID);
   nc.items.push({ cat: "New Category", subs: [{ name: "New Item", checked: false, checkedBy: null, checkedAt: null }] });
+  saveNCLocal();
   renderNCBody(_ncPID);
 }
 function ncDeleteCat(ci) {
   if(!_ncPID || !canEditProjectId(_ncPID)) return;
   if(!confirm("Delete this entire category and all its subcategories?")) return;
+  ncFlushInputs();
   const nc = getNC(_ncPID);
   nc.items.splice(ci, 1);
+  saveNCLocal();
   renderNCBody(_ncPID);
 }
 
