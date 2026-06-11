@@ -1469,7 +1469,7 @@ body.dark-mode .btn-edit-proj:hover { color: #fff; }
         <div class="lc-file-icon" id="lcFileIcon">📄</div>
         <div class="lc-fetch-info">
           <div class="lc-fetch-label">Fetching from</div>
-          <div class="lc-fetch-msg" id="lcFetchMsg">Connecting to Google Sheets…</div>
+          <div class="lc-fetch-msg" id="lcFetchMsg">Connecting to SharePoint…</div>
         </div>
         <div class="lc-fetch-signal">
           <div class="lc-signal-bar"></div>
@@ -2055,13 +2055,33 @@ let _msalUser = null;   // Azure AD account object
 // Initialize MSAL — called once on page load
 
 function showAccessDeniedPopup(email, name) {
-  // Hide app and login screen
-  document.getElementById("appShell").style.display = "none";
-  document.getElementById("loginScreen").style.display = "none";
-  // Show popup
-  const el = document.getElementById("accessDeniedEmail");
-  if(el) el.textContent = email || "Unknown account";
-  document.getElementById("accessDeniedOverlay").classList.add("open");
+  // Hide app and login screen safely
+  const app = document.getElementById("appShell");
+  const login = document.getElementById("loginScreen");
+  if(app) app.style.display = "none";
+  if(login) login.style.display = "none";
+  // Show overlay — use style directly in case classList fails
+  const overlay = document.getElementById("accessDeniedOverlay");
+  if(overlay) {
+    const el = document.getElementById("accessDeniedEmail");
+    if(el) el.textContent = email || "Unknown account";
+    overlay.style.display = "flex";
+    overlay.classList.add("open");
+  } else {
+    // Fallback: overlay not in DOM yet — inject it directly
+    document.body.insertAdjacentHTML("beforeend", `
+      <div style="position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:999999;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(6px);">
+        <div style="background:#fff;border-radius:20px;padding:48px 40px 40px;max-width:440px;width:90%;text-align:center;box-shadow:0 32px 80px rgba(0,0,0,.4);">
+          <div style="font-size:56px;margin-bottom:16px;">🚫</div>
+          <div style="font-size:22px;font-weight:800;color:#e53e3e;margin-bottom:8px;">Access Denied</div>
+          <div style="font-size:14px;color:#555;margin-bottom:6px;">You are not authorised to access this application.</div>
+          <div style="display:inline-block;background:#fff5f5;border:1px solid #feb2b2;color:#c53030;font-size:13px;font-weight:600;padding:6px 14px;border-radius:20px;margin:10px 0 20px;word-break:break-all;">${email||"Unknown account"}</div>
+          <div style="font-size:13px;color:#777;margin-bottom:28px;">This app is restricted to approved users only.<br>Contact your administrator to request access.</div>
+          <button onclick="accessDeniedSignOut()" style="background:#e53e3e;color:#fff;border:none;padding:13px 32px;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;width:100%;">🔒 Sign Out &amp; Try Different Account</button>
+          <button onclick="window.location.reload()" style="background:transparent;color:#888;border:1px solid #ddd;padding:11px 32px;border-radius:10px;font-size:14px;cursor:pointer;width:100%;margin-top:10px;">↩ Go Back</button>
+        </div>
+      </div>`);
+  }
 }
 
 async function accessDeniedSignOut() {
@@ -2163,8 +2183,19 @@ async function afterMsalLogin() {
   const email = (_msalUser.username || "").toLowerCase();
   const displayName = _msalUser.name || _msalUser.username;
 
-  // Try to load users from Google Sheet first
-  await loadUsersFromServer();
+  // Load users from SharePoint PM_Users
+  try {
+    await loadUsersFromServer();
+  } catch(err) {
+    // If 403/forbidden — this Microsoft account doesn't have SharePoint access
+    // Show a specific permission error instead of access denied
+    console.error("loadUsersFromServer failed:", err);
+    const isPermErr = err.message && (err.message.includes("403") || err.message.includes("Forbidden") || err.message.includes("accessDenied"));
+    if(isPermErr) {
+      setTimeout(() => showAccessDeniedPopup(email, displayName), 300);
+      return;
+    }
+  }
   syncPeopleToUsers();
 
   // Find matching user in PM_Users list by email
@@ -2193,7 +2224,7 @@ async function afterMsalLogin() {
     applyDB(cached, true);
     setSyncUI("connected", "☁ Syncing…");
     syncFromServer(true).then(ok => {
-      setSyncUI("connected", ok ? "☁ Google Sheets ✓" : "☁ Cached");
+      setSyncUI("connected", ok ? "☁ SharePoint ✓" : "☁ Cached");
       checkTargetDateWarnings();
     });
   } else {
@@ -2212,8 +2243,8 @@ function saveCL(pid, data) { _checklist[pid] = data; }
 
 /* ═══════════════════════════════════════════
    ╔══════════════════════════════════════════╗
-   ║  USERS ARE NOW MANAGED IN GOOGLE SHEET  ║
-   ║  Open the "Users" tab in your Sheet     ║
+   ║  USERS ARE NOW MANAGED IN SHAREPOINT    ║
+   ║  Add users in SharePoint PM_Users list   ║
    ║  to add / edit / delete users & passwords║
    ╚══════════════════════════════════════════╝
 
@@ -2230,7 +2261,7 @@ function saveCL(pid, data) { _checklist[pid] = data; }
 let USERS = [];
 /* ═══════════════════════════════════════════
    PEOPLE MANAGEMENT — editable by admin
-   Seeded from Google Sheet Users tab on load
+   Seeded from SharePoint PM_Users list on login
 ═══════════════════════════════════════════ */
 const PEOPLE_KEY = "pm_people_v1";
 
@@ -2274,7 +2305,7 @@ let selectedUserKey = null; // tracks which user is chosen in dropdown
 
 /* ═══════════════════════════════════════════
    DATE UTILITY — robust parsing for dates
-   coming from Google Sheets (various formats)
+   coming from SharePoint / various date formats
 ═══════════════════════════════════════════ */
 function safeFormatDate(dateVal) {
   if(!dateVal) return "—";
@@ -2286,7 +2317,7 @@ function safeFormatDate(dateVal) {
   // Try direct parse (handles ISO strings, DD/MM/YYYY, MM/DD/YYYY etc.)
   let d = new Date(dateVal);
   if(!isNaN(d)) return d.toLocaleDateString("en-IN", {day:"2-digit",month:"short",year:"numeric"});
-  // Try DD/MM/YYYY format (common in India / Google Sheets)
+  // Try DD/MM/YYYY format (common in India / SharePoint)
   if(typeof dateVal === "string") {
     const parts = dateVal.trim().split(/[\/\-\.]/);
     if(parts.length === 3) {
@@ -2374,7 +2405,7 @@ function hideLoadingOverlay() {
 /* ═══════════════════════════════════════════
    SERVER SYNC  — v9 optimised
    • Cache-first: load localStorage instantly,
-     then pull Google Sheets in background
+     then pull SharePoint in background
    • Single HTTP call (no separate checkServer)
    • Keep-alive ping every 8 min to prevent
      Apps Script cold-starts
@@ -2544,7 +2575,8 @@ async function spGetAllItems(listName) {
   let url = `https://graph.microsoft.com/v1.0/sites/${siteId}/lists/${listId}/items?expand=fields&$top=999`;
   let items = [];
   while(url) {
-    const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    const pageToken = await getMsalToken(); // refresh token each page (handles expiry)
+    const r = await fetch(url, { headers: { Authorization: `Bearer ${pageToken}` } });
     if(!r.ok) throw new Error("spGetAllItems failed: " + await r.text());
     const data = await r.json();
     items = items.concat(data.value || []);
@@ -2579,7 +2611,7 @@ async function spCreateItem(listName, fields) {
 
 // Generic: update item by SharePoint item id
 async function spUpdateItem(listName, spItemId, fields) {
-  const token = await getMsalToken();
+  const token = await getMsalToken(); // always fresh token
   const siteId = await spSiteId();
   const listId = await spListId(listName);
   const r = await fetch(
@@ -2590,7 +2622,14 @@ async function spUpdateItem(listName, spItemId, fields) {
       body: JSON.stringify(fields)
     }
   );
-  if(!r.ok) throw new Error("spUpdateItem failed: " + await r.text());
+  if(!r.ok) {
+    // If item was deleted externally, remove from cache and skip
+    if(r.status === 404) {
+      if(_spItemCache[listName]) delete _spItemCache[listName][Object.keys(_spItemCache[listName]).find(k => _spItemCache[listName][k] === spItemId)];
+      return;
+    }
+    throw new Error("spUpdateItem failed: " + await r.text());
+  }
 }
 
 // Generic: delete item by SharePoint item id
@@ -2684,8 +2723,11 @@ function spToProject(f) {
 }
 
 /* ── Pull from SharePoint ── */
+let _syncing = false;
 async function syncFromServer(silent) {
   if(!_msalUser) { setSyncUI("offline","Not signed in"); return false; }
+  if(_syncing) return false; // prevent concurrent syncs
+  _syncing = true;
   if(!silent) setSyncUI("saving","Connecting to SharePoint…");
   try {
     // Verify site connection first
@@ -2793,9 +2835,11 @@ async function syncFromServer(silent) {
     applyDB(db, silent);
     setSyncUI("connected","☁ SharePoint ✓");
     console.log("✅ SharePoint sync complete");
+    _syncing = false;
     return true;
   } catch(err) {
     serverOK = false;
+    _syncing = false;
     console.error("syncFromServer error:", err);
     setSyncUI("offline","Sync failed — " + (err.message||"unknown").slice(0,50));
     showToast("❌ SharePoint Sync Error: " + (err.message||"unknown"));
@@ -2804,8 +2848,11 @@ async function syncFromServer(silent) {
 }
 
 /* ── Push entire app state to SharePoint ── */
+let _pushing = false;
 async function pushAll() {
   if(!_msalUser) return;
+  if(_pushing) { setTimeout(pushAll, 1000); return; } // queue if already pushing
+  _pushing = true;
   setSyncUI("saving","Saving…");
   // Update local cache immediately
   const db = { projects:_projects, checklist:_checklist, meetings:_meetings, notes:_notes, docs:_docs, naissance:_nc };
@@ -2814,11 +2861,13 @@ async function pushAll() {
     await spPushAll(db);
     serverOK = true;
     _pendingPush = false;
+    _pushing = false;
     setSyncUI("connected","☁ Saved ✓");
     setTimeout(()=>setSyncUI("connected","☁ SharePoint ✓"), 2500);
   } catch(err) {
     serverOK = false;
     _pendingPush = false;
+    _pushing = false;
     console.error("pushAll error:", err);
     setSyncUI("offline","Save failed — " + (err.message||"unknown").slice(0,50));
     showToast("❌ SharePoint Save Error: " + (err.message||"unknown"));
@@ -2937,7 +2986,7 @@ async function loadUsersFromServer() {
     }
   } catch(err) {
     console.warn("⚠️ Could not load users from SharePoint PM_Users:", err);
-    // Fallback to localStorage cache
+    // Try localStorage cache first
     const cached = localStorage.getItem(PEOPLE_KEY);
     if(cached) {
       try {
@@ -2945,9 +2994,14 @@ async function loadUsersFromServer() {
         if(Array.isArray(list) && list.length) {
           USERS.length = 0;
           list.forEach(u => USERS.push(u));
+          console.log("✅ Loaded users from cache:", USERS.length);
+          return; // use cache, proceed with login
         }
       } catch {}
     }
+    // No cache + 403 = this account doesn't have SharePoint permissions
+    // Re-throw so afterMsalLogin can handle it
+    throw err;
   }
 }
 
@@ -3052,7 +3106,9 @@ const VIEWS = {
 function showView(id) {
   if(id !== "detail") prevView = id;
   document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
-  document.getElementById("view-"+id).classList.add("active");
+  const viewEl = document.getElementById("view-"+id);
+  if(!viewEl) { console.warn("showView: view-"+id+" not found"); return; }
+  viewEl.classList.add("active");
   document.querySelectorAll(".nav-item").forEach(n => n.classList.remove("active"));
   const ni = document.getElementById("nav-"+id);
   if(ni) ni.classList.add("active");
@@ -3511,7 +3567,8 @@ async function delProject(pid) {
   delete (_docs[pid]     || {});
   delete (_nc[pid]       || {});
   refreshAllViews();
-  showView("allProjects");
+  // Navigate back safely
+  if(document.getElementById("view-allProjects")) showView("allProjects");
   showToast("🗑️ Deleting from SharePoint…");
 
   // Delete from SharePoint — all lists that contain this project's data
@@ -3771,7 +3828,7 @@ async function saveMeeting() {
   const hd = document.getElementById("meeting-hd-"+_meetingPhaseNum);
   if(hd) { const cnt = getMeetingsForPhase(_meetingPID, _meetingPhaseNum).length; hd.innerHTML = "📝 Meeting Log <span class='meeting-count-chip'>" + cnt + "</span>"; }
   showToast("✅ Meeting logged for Phase " + _meetingPhaseNum + "!");
-  await pushAll(); // ← sync to Google Sheets so all team members see it
+  await pushAll(); // ← sync to SharePoint so all team members see it
 }
 
 async function deleteMeeting(pid, phaseNum, meetingId) {
@@ -3790,7 +3847,7 @@ async function deleteMeeting(pid, phaseNum, meetingId) {
   const hd = document.getElementById("meeting-hd-"+phaseNum);
   if(hd) { hd.innerHTML = "📝 Meeting Log <span class='meeting-count-chip'>" + arr.length + "</span>"; }
   showToast("🗑️ Meeting entry deleted");
-  await pushAll(); // ← sync to Google Sheets so all team members see the deletion
+  await pushAll(); // ← sync to SharePoint so all team members see the deletion
 }
 
 function renderChecklist(pid) {
@@ -4960,7 +5017,7 @@ async function saveEditUser() {
   }
   renderAdminPanel();
   closeEditUserModal();
-  showToast("⏳ Saving changes & syncing to Google Sheet…");
+  showToast("⏳ Saving changes & syncing to SharePoint…");
   // Build email notification payload
   const emailInfo = email ? {
     name,
@@ -4971,11 +5028,11 @@ async function saveEditUser() {
     isUpdate: true
   } : null;
   await pushUsersToSheet(emailInfo);
-  showToast(email ? `✅ ${name} updated & notification email sent!` : `✅ ${name} updated & saved to Google Sheet!`);
+  showToast(email ? `✅ ${name} updated & notification email sent!` : `✅ ${name} updated & saved to SharePoint!`);
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-//  pushUsersToSheet — saves current _people list to Google Sheet Users tab
+//  pushUsersToSheet — saves current _people list to SharePoint PM_Users
 //  Called automatically after every Add / Remove in People Manager
 // ════════════════════════════════════════════════════════════════════════════
 async function pushUsersToSheet(newUserInfo) {
@@ -5012,9 +5069,9 @@ async function addPerson() {
   document.getElementById("apPass").value = "";
   document.getElementById("apEmail").value = "";
   renderAdminPanel();
-  showToast(`⏳ Adding ${name} & syncing to Google Sheet…`);
+  showToast(`⏳ Adding ${name} & syncing to SharePoint…`);
   await pushUsersToSheet(email ? { name, uname, pass, email, role } : null);
-  showToast(email ? `✅ ${name} added & welcome email sent!` : `✅ ${name} added & saved to Google Sheet!`);
+  showToast(email ? `✅ ${name} added & welcome email sent!` : `✅ ${name} added & saved to SharePoint!`);
 }
 
 async function deletePerson(ukey) {
@@ -5026,9 +5083,9 @@ async function deletePerson(ukey) {
   savePeople(_people);
   syncPeopleToUsers();
   renderAdminPanel();
-  showToast(`⏳ Removing ${person.name} & syncing to Google Sheet…`);
+  showToast(`⏳ Removing ${person.name} & syncing to SharePoint…`);
   await pushUsersToSheet();
-  showToast(`🗑️ ${person.name} removed & Google Sheet updated!`);
+  showToast(`🗑️ ${person.name} removed & SharePoint updated!`);
 }
 
 /* ═══════════════════════════════════════════
@@ -5051,7 +5108,7 @@ document.getElementById("appShell").style.display   = "none";
 // Login is handled by MSAL — no manual lock/unlock needed
 
 // Startup: initialize MSAL (handles redirect callback + silent re-login)
-// Users are loaded from Google Sheet inside afterMsalLogin()
+// Users are loaded from SharePoint inside afterMsalLogin()
 // Use DOMContentLoaded to ensure all elements exist before MSAL runs
 if(document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", initMsal);
@@ -5503,7 +5560,7 @@ function addDeckRow() { if(!_deckPID || !canEditProjectId(_deckPID)) { showToast
 function deleteDeckRow(i) { if(!_deckPID || !canEditProjectId(_deckPID)) return; const deck=getDeckGantt(_deckPID); deck.rows.splice(i,1); setDeckGantt(_deckPID, deck); renderDeckGantt(); }
 function applyDeckTemplate() { if(!_deckPID || !canEditProjectId(_deckPID)) { showToast("🔐 Higher Authority has view-only access"); return; } const base=newBlankDeck(_deckPID); const p=getProjects().find(q=>q.id===_deckPID)||{}; const owner=p.owner || (currentUser ? currentUser.name : "Team"); const stamp=Date.now(); base.rows=[{id:"dg_"+stamp+"_1",phase:"PHASE 1 — DISCUSSION POINT",task:"App discussion / requirement confirmation",owner,start:base.start,end:deckDateAt(base.start,base.end,.06),type:"discussion",milestone:false},{id:"dg_"+stamp+"_2",phase:"PHASE 2 — APP DEVELOPMENT",task:"App building — core module completion",owner,start:deckDateAt(base.start,base.end,.08),end:deckDateAt(base.start,base.end,.42),type:"app",milestone:false},{id:"dg_"+stamp+"_3",phase:"PHASE 3 — REVIEWS",task:"Internal review",owner,start:deckDateAt(base.start,base.end,.45),end:deckDateAt(base.start,base.end,.45),type:"discussion",milestone:true},{id:"dg_"+stamp+"_4",phase:"PHASE 4 — CHANGES & DOCUMENTATION",task:"Changes and updates",owner,start:deckDateAt(base.start,base.end,.55),end:deckDateAt(base.start,base.end,.75),type:"change",milestone:false},{id:"dg_"+stamp+"_5",phase:"PHASE 4 — CHANGES & DOCUMENTATION",task:"Documentation preparation / SOP / checklist",owner,start:deckDateAt(base.start,base.end,.58),end:deckDateAt(base.start,base.end,.80),type:"doc",milestone:false},{id:"dg_"+stamp+"_6",phase:"PHASE 5 — GO-LIVE & TRAINING",task:"Final changes and review",owner,start:deckDateAt(base.start,base.end,.82),end:deckDateAt(base.start,base.end,.94),type:"training",milestone:false},{id:"dg_"+stamp+"_7",phase:"PHASE 5 — GO-LIVE & TRAINING",task:"Process go-live",owner:"All",start:base.end,end:base.end,type:"training",milestone:true}]; setDeckGantt(_deckPID, base); renderDeckGantt(); }
 function resetDeckGantt() { if(!_deckPID || !canEditProjectId(_deckPID)) { showToast("🔐 Higher Authority has view-only access"); return; } if(!confirm("Clear all Gantt tasks and make this chart blank?")) return; const blank=newBlankDeck(_deckPID); setDeckGantt(_deckPID, blank); const nc=getNC(_deckPID); nc.gantt=blank; saveNCLocal(); renderDeckGantt(); }
-async function saveDeckGantt() { if(!_deckPID) return; if(!canEditProjectId(_deckPID)) { showToast("🔐 You can save this chart only for projects assigned to you"); return; } const deck=getDeckGantt(_deckPID); deck.lastUpdated=new Date().toISOString(); setDeckGantt(_deckPID, deck); const nc=getNC(_deckPID); nc.gantt=deck; nc.lastUpdated=new Date().toISOString(); saveNCLocal(); _pendingPush=true; showToast("✅ Editable Gantt chart saved in browser cache and Google Sheet sync started!"); await pushAll(); }
+async function saveDeckGantt() { if(!_deckPID) return; if(!canEditProjectId(_deckPID)) { showToast("🔐 You can save this chart only for projects assigned to you"); return; } const deck=getDeckGantt(_deckPID); deck.lastUpdated=new Date().toISOString(); setDeckGantt(_deckPID, deck); const nc=getNC(_deckPID); nc.gantt=deck; nc.lastUpdated=new Date().toISOString(); saveNCLocal(); _pendingPush=true; showToast("✅ Editable Gantt chart saved in browser cache and SharePoint sync started!"); await pushAll(); }
 function printDeckGantt() { if(!_deckPID) return; const deck=getDeckGantt(_deckPID); const p=getProjects().find(q=>q.id===_deckPID)||{}; const html=buildDeckGanttHtml(deck); const w=window.open("","_blank"); if(!w){showToast("⚠️ Pop-up blocked! Allow pop-ups for PDF export.");return;} w.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${x(deck.title||"Project Gantt Chart")}</title><style>@page{size:A4 landscape;margin:8mm;}*{box-sizing:border-box;}body{font-family:Arial,sans-serif;color:#0f172a;margin:0;background:#fff;}.print-page{padding:8px;}.print-meta{font-size:11px;color:#475569;margin:6px 0 10px;display:flex;justify-content:space-between;gap:12px;}.deck-scroll{overflow:visible;border:1.5px solid #c7d2e3;background:#fff;}.deck-table{width:100%;border-collapse:collapse;table-layout:fixed;font-family:Arial,sans-serif;color:#0f172a;}.deck-table th{background:#1f5f9e;color:#fff;border:1px solid #8eb0d3;padding:5px 4px;font-size:9px;font-weight:800;text-align:center;}.deck-table th.deck-main-title{background:#173c70;font-size:14px;padding:9px;}.deck-table th.deck-month-title{background:#2167a9;font-size:9px;padding:4px;}.deck-table td{border:1px solid #c8cdd4;height:20px;padding:0;font-size:9px;background:#f8fafc;}.deck-table tr.phase-row td{background:#24364f;color:#fff;font-weight:900;padding:4px 6px;text-transform:uppercase;}.deck-num{width:34px;text-align:center;background:#fff!important;}.deck-task{width:230px;background:#f8fafc!important;padding:3px 6px!important;font-weight:800;}.deck-owner{width:88px;background:#fff!important;text-align:center;}.deck-date{width:48px;background:#fff!important;text-align:center;}.deck-day{width:18px;text-align:center;}.deck-weekend{background:#eef0f3!important;}.deck-bar{height:100%;min-height:19px;}.deck-print-block{display:block;width:100%;height:19px;line-height:17px;font-size:20px;overflow:hidden;transform:scaleX(1.8);transform-origin:center;}.deck-bar-discussion{background:#1769bf!important;}.deck-bar-app{background:#2e7d32!important;}.deck-bar-change{background:#e65100!important;}.deck-bar-doc{background:#6a1b9a!important;}.deck-bar-training{background:#bd171a!important;}.deck-milestone{color:#ef4444;font-size:15px;line-height:18px;font-weight:900;}.deck-legend{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:9px 2px 0;font-size:9px;color:#334155;}.deck-legend-item{display:flex;align-items:center;gap:5px;}.deck-swatch{width:42px;height:12px;display:inline-block;border:1px solid rgba(0,0,0,.1);}.deck-print-btn{position:fixed;right:18px;bottom:18px;background:#1f7a2d;color:#fff;border:none;border-radius:10px;padding:11px 18px;font-weight:800;cursor:pointer;}@media print{.deck-print-btn{display:none!important;}}</style></head><body><div class="print-page"><div class="print-meta"><strong>${x(p.name||"Project")}</strong><span>Start: ${safeFormatDate(deck.start)} | Target: ${safeFormatDate(deck.end)} | Generated: ${new Date().toLocaleString("en-IN")}</span></div>${html}</div><button class="deck-print-btn" onclick="window.print()">🖨 Print / Save PDF</button></body></html>`); w.document.close(); setTimeout(()=>w.print(),500); }
 /* ═══════════════════════════════════════════
    NAISSANCE PROJECT CHECKLIST
@@ -6588,7 +6645,7 @@ function closeTargetWarnModal() {
           <div class="mr-option-icon">📊</div>
           <div>
             <div class="mr-option-title">Excel / CSV Export</div>
-            <div class="mr-option-desc">Spreadsheet with all projects, progress %, dates, team, status — ready for Excel, Google Sheets, or further analysis.</div>
+            <div class="mr-option-desc">Spreadsheet with all projects, progress %, dates, team, status — ready for Excel, SharePoint, or further analysis.</div>
           </div>
         </div>
         <div class="mr-option" id="mrOptSummary" onclick="selectMrFormat('summary')">
@@ -6725,7 +6782,7 @@ function closeTargetWarnModal() {
   <div class="edit-proj-modal">
     <div class="edit-proj-title">✏️ Edit Project</div>
     <div class="edit-proj-sub" id="epSubTitle">Update project details, team, dates, and more</div>
-    <div class="ep-banner">💡 <span>Changes are saved to Google Sheets instantly and reflected for all users.</span></div>
+    <div class="ep-banner">💡 <span>Changes are saved to SharePoint instantly and reflected for all users.</span></div>
     <div class="ep-form-grid">
       <div class="ep-field full"><label>Project Name *</label><input type="text" id="epName" placeholder="e.g. HR Portal App"></div>
       <div class="ep-field full"><label>Description</label><textarea id="epDesc" placeholder="Brief description..."></textarea></div>
