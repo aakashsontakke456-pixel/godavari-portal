@@ -1361,9 +1361,94 @@ body.dark-mode .btn-edit-proj:hover { color: #fff; }
   .login-wrap { width:95%; flex-direction:column; }
   .login-left { width:100%; padding:32px; }
 }
+
+  /* ── Access Denied Popup ── */
+  #accessDeniedOverlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.75);
+    z-index: 99999;
+    align-items: center;
+    justify-content: center;
+    backdrop-filter: blur(6px);
+  }
+  #accessDeniedOverlay.open { display: flex; }
+  .access-denied-box {
+    background: #fff;
+    border-radius: 20px;
+    padding: 48px 40px 40px;
+    max-width: 440px;
+    width: 90%;
+    text-align: center;
+    box-shadow: 0 32px 80px rgba(0,0,0,0.35);
+    animation: popIn .3s cubic-bezier(.34,1.56,.64,1);
+  }
+  @keyframes popIn { from { transform: scale(.7); opacity:0; } to { transform: scale(1); opacity:1; } }
+  .access-denied-icon {
+    font-size: 56px;
+    margin-bottom: 16px;
+    display: block;
+  }
+  .access-denied-title {
+    font-size: 22px;
+    font-weight: 800;
+    color: #e53e3e;
+    margin-bottom: 8px;
+  }
+  .access-denied-sub {
+    font-size: 14px;
+    color: #555;
+    margin-bottom: 6px;
+    line-height: 1.6;
+  }
+  .access-denied-email {
+    display: inline-block;
+    background: #fff5f5;
+    border: 1px solid #feb2b2;
+    color: #c53030;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 6px 14px;
+    border-radius: 20px;
+    margin: 10px 0 20px;
+    word-break: break-all;
+  }
+  .access-denied-msg {
+    font-size: 13px;
+    color: #777;
+    margin-bottom: 28px;
+    line-height: 1.6;
+  }
+  .access-denied-btn {
+    background: #e53e3e;
+    color: #fff;
+    border: none;
+    padding: 13px 32px;
+    border-radius: 10px;
+    font-size: 15px;
+    font-weight: 700;
+    cursor: pointer;
+    width: 100%;
+    transition: background .2s;
+  }
+  .access-denied-btn:hover { background: #c53030; }
+  .access-denied-btn-sec {
+    background: transparent;
+    color: #888;
+    border: 1px solid #ddd;
+    padding: 11px 32px;
+    border-radius: 10px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    width: 100%;
+    margin-top: 10px;
+    transition: all .2s;
+  }
+  .access-denied-btn-sec:hover { background: #f5f5f5; color: #555; }
 </style>
-</head>
-<body>
+  <scriptbody>
 
 <!-- ════════════ LOADING OVERLAY ════════════ -->
 <div id="loadingOverlay">
@@ -1968,6 +2053,34 @@ let _msalReady = false;
 let _msalUser = null;   // Azure AD account object
 
 // Initialize MSAL — called once on page load
+
+function showAccessDeniedPopup(email, name) {
+  // Hide app and login screen
+  document.getElementById("appShell").style.display = "none";
+  document.getElementById("loginScreen").style.display = "none";
+  // Show popup
+  const el = document.getElementById("accessDeniedEmail");
+  if(el) el.textContent = email || "Unknown account";
+  document.getElementById("accessDeniedOverlay").classList.add("open");
+}
+
+async function accessDeniedSignOut() {
+  document.getElementById("accessDeniedOverlay").classList.remove("open");
+  sessionStorage.clear();
+  localStorage.removeItem("msal.account.keys");
+  if(_msalInstance) {
+    try {
+      await _msalInstance.logoutRedirect({
+        postLogoutRedirectUri: window.location.origin + window.location.pathname
+      });
+    } catch(e) {
+      window.location.reload();
+    }
+  } else {
+    window.location.reload();
+  }
+}
+
 async function initMsal() {
   const btn = document.getElementById("msal-signin-btn");
   const status = document.getElementById("msal-status");
@@ -2062,26 +2175,9 @@ async function afterMsalLogin() {
 
   // ── BLOCK: user not in PM_Users list ──
   if(!matched) {
-    // Sign out from MSAL
     _msalUser = null;
-    if(_msalInstance) {
-      try { await _msalInstance.logoutRedirect({ postLogoutRedirectUri: window.location.href }); }
-      catch(e) { sessionStorage.clear(); }
-    }
-    // Show login screen with error
-    document.getElementById("appShell").style.display = "none";
-    document.getElementById("loginScreen").style.display = "flex";
-    const errEl = document.getElementById("loginError");
-    if(errEl) {
-      errEl.style.display = "block";
-      errEl.innerHTML = `❌ Access Denied<br><small style="font-size:11px;opacity:.8;">
-        <b>${email}</b> is not authorised to use this app.<br>
-        Contact your admin to get access.</small>`;
-    }
-    const statusEl = document.getElementById("msal-status");
-    if(statusEl) statusEl.textContent = "";
-    const btn = document.getElementById("msal-signin-btn");
-    if(btn) { btn.disabled = false; btn.textContent = "Try a different account"; }
+    // Show full-screen access denied popup
+    showAccessDeniedPopup(email, displayName);
     return;
   }
 
@@ -2410,7 +2506,7 @@ async function spDeduplicateList(listName) {
   const token = await getMsalToken();
   const siteId = await spSiteId();
   const listId = await spListId(listName);
-  let url = `https://graph.microsoft.com/v1.0/sites/${siteId}/lists/${listId}/items?expand=fields&$select=id,fields/Title,fields/Created&$top=999`;
+  let url = `https://graph.microsoft.com/v1.0/sites/${siteId}/lists/${listId}/items?expand=fields&$top=500`;
   let items = [];
   while(url) {
     const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
@@ -2672,14 +2768,22 @@ async function syncFromServer(silent) {
       });
     });
 
-    // Naissance: { [projectId]: { ...data } }
+    // Naissance: { [projectId]: { date, items:[...] } }
     const naissance = {};
     ncItems.forEach(f => {
       const pid = f.Title || "";
       try {
-        naissance[pid] = f.NaissanceData ? JSON.parse(f.NaissanceData) : {};
-        naissance[pid].projectName = f.ProjectName || pid;
-        naissance[pid].lastUpdated = f.LastUpdated || "";
+        if(f.NaissanceData) {
+          const parsed = JSON.parse(f.NaissanceData);
+          // Store only if valid {date, items} structure
+          if(parsed && Array.isArray(parsed.items)) {
+            naissance[pid] = parsed;
+          } else {
+            naissance[pid] = {}; // corrupt — getNC() will rebuild from template
+          }
+        } else {
+          naissance[pid] = {};
+        }
       } catch { naissance[pid] = {}; }
     });
 
@@ -2790,12 +2894,14 @@ async function spPushAll(db) {
     }
   }
 
-  // Naissance
+  // Naissance — store clean {date, items} object only
   for(const [pid, data] of Object.entries(db.naissance || {})) {
+    if(!data || !Array.isArray(data.items)) continue; // skip if corrupt
+    const cleanData = { date: data.date, items: data.items };
     await spUpsert(SP_CONFIG.lists.naissance, pid, {
-      ProjectName:   data.projectName || pid,
-      LastUpdated:   data.lastUpdated || new Date().toISOString(),
-      NaissanceData: JSON.stringify(data)
+      ProjectName:   (db.projects||[]).find(p=>p.id===pid)?.name || pid,
+      LastUpdated:   new Date().toISOString(),
+      NaissanceData: JSON.stringify(cleanData)
     });
   }
 }
@@ -3395,12 +3501,72 @@ async function saveProject() {
 
 async function delProject(pid) {
   if(!canDeleteProjectId(pid)) { showToast("🔐 Only the Project Leader or Admin can delete this project"); return; }
-  if(!confirm("Delete this project and all checklist data?")) return;
-  savePL(getProjects().filter(p=>p.id!==pid));
+  if(!confirm("Delete this project and all its data from SharePoint?")) return;
+
+  // Remove from local state first (instant UI update)
+  savePL(getProjects().filter(p => p.id !== pid));
   delete _checklist[pid];
+  delete (_meetings[pid] || {});
+  delete (_notes[pid]    || {});
+  delete (_docs[pid]     || {});
+  delete (_nc[pid]       || {});
   refreshAllViews();
-  showToast("🗑️ Project deleted");
-  await pushAll();
+  showView("allProjects");
+  showToast("🗑️ Deleting from SharePoint…");
+
+  // Delete from SharePoint — all lists that contain this project's data
+  try {
+    const lists = [
+      SP_CONFIG.lists.projects,
+      SP_CONFIG.lists.checklist,
+      SP_CONFIG.lists.meetings,
+      SP_CONFIG.lists.notes,
+      SP_CONFIG.lists.docs,
+      SP_CONFIG.lists.naissance
+    ];
+    for(const listName of lists) {
+      await spDeleteAllByProjectId(listName, pid);
+    }
+    // Clear item cache for this project
+    for(const listName of lists) {
+      if(_spItemCache[listName]) {
+        Object.keys(_spItemCache[listName]).forEach(k => {
+          if(k === pid || k.startsWith(pid + "_")) delete _spItemCache[listName][k];
+        });
+      }
+    }
+    showToast("✅ Project deleted from SharePoint");
+  } catch(err) {
+    console.error("SP delete error:", err);
+    showToast("⚠️ Deleted locally — SharePoint delete failed: " + err.message);
+  }
+}
+
+// Delete ALL items matching a projectId (by Title prefix or ProjectId field)
+async function spDeleteAllByProjectId(listName, pid) {
+  const token = await getMsalToken();
+  const siteId = await spSiteId();
+  const listId = await spListId(listName);
+  // Fetch all items for this project
+  let url = `https://graph.microsoft.com/v1.0/sites/${siteId}/lists/${listId}/items?expand=fields&$top=999`;
+  let toDelete = [];
+  while(url) {
+    const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if(!r.ok) return;
+    const data = await r.json();
+    (data.value || []).forEach(item => {
+      const f = item.fields || {};
+      // Match: Title equals pid (PM_Projects, PM_Naissance) OR ProjectId field equals pid
+      if(f.Title === pid || f.ProjectId === pid || (f.Title && f.Title.startsWith(pid + "_"))) {
+        toDelete.push(item.id);
+      }
+    });
+    url = data["@odata.nextLink"] || null;
+  }
+  for(const itemId of toDelete) {
+    await spDeleteItem(listName, itemId);
+  }
+  console.log(`🗑 Deleted ${toDelete.length} items from ${listName} for project ${pid}`);
 }
 
 /* ═══════════════════════════════════════════
@@ -3611,6 +3777,12 @@ async function saveMeeting() {
 async function deleteMeeting(pid, phaseNum, meetingId) {
   if(!canEditProjectId(pid)) { showToast("🔐 You can delete meetings only from projects assigned to you"); return; }
   if(!confirm("Delete this meeting log entry?")) return;
+  // Delete from SharePoint
+  try {
+    const existing = await spFindByTitle(SP_CONFIG.lists.meetings, meetingId);
+    if(existing) await spDeleteItem(SP_CONFIG.lists.meetings, existing.id);
+    if(_spItemCache[SP_CONFIG.lists.meetings]) delete _spItemCache[SP_CONFIG.lists.meetings][meetingId];
+  } catch(e) { console.warn("SP meeting delete failed:", e); }
   const arr = getMeetingsForPhase(pid, phaseNum).filter(m => m.id !== meetingId);
   saveMeetingsForPhase(pid, phaseNum, arr);
   const logEl = document.getElementById("meeting-log-"+phaseNum);
@@ -4010,6 +4182,27 @@ function exportProjectReport(pid) {
   </div>
 </div>
 <button class="print-btn no-print" onclick="window.print()">🖨️ Print / Save as PDF</button>
+
+<!-- ── Access Denied Popup ── -->
+<div id="accessDeniedOverlay">
+  <div class="access-denied-box">
+    <span class="access-denied-icon">🚫</span>
+    <div class="access-denied-title">Access Denied</div>
+    <div class="access-denied-sub">You are not authorised to access this application.</div>
+    <div class="access-denied-email" id="accessDeniedEmail">—</div>
+    <div class="access-denied-msg">
+      This app is restricted to approved users only.<br>
+      Please contact your administrator to request access.
+    </div>
+    <button class="access-denied-btn" onclick="accessDeniedSignOut()">
+      🔒 Sign Out &amp; Try Different Account
+    </button>
+    <button class="access-denied-btn-sec" onclick="window.location.reload()">
+      ↩ Go Back
+    </button>
+  </div>
+</div>
+
 </body>
 </html>`;
 
@@ -4096,6 +4289,12 @@ async function saveNote() {
 
 async function deleteNote(pid, phaseNum, noteId) {
   if(!canEditProjectId(pid)) { showToast("🔐 You can delete notes only from projects assigned to you"); return; }
+  // Delete from SharePoint
+  try {
+    const existing = await spFindByTitle(SP_CONFIG.lists.notes, noteId);
+    if(existing) await spDeleteItem(SP_CONFIG.lists.notes, existing.id);
+    if(_spItemCache[SP_CONFIG.lists.notes]) delete _spItemCache[SP_CONFIG.lists.notes][noteId];
+  } catch(e) { console.warn("SP note delete failed:", e); }
   if(!confirm("Delete this note?")) return;
   const arr = getNotesForPhase(pid, phaseNum).filter(n => n.id !== noteId);
   saveNotesForPhase(pid, phaseNum, arr);
@@ -5336,10 +5535,12 @@ function saveNCLocal() {
 }
 
 function getNC(pid) {
-  if(_nc[pid]) return _nc[pid];
-  // Initialise from default template
+  // If exists and has valid items array — use it
+  if(_nc[pid] && Array.isArray(_nc[pid].items) && _nc[pid].items.length > 0) return _nc[pid];
+  // If exists but items is missing/corrupt — preserve date but rebuild items from template
+  const existingDate = _nc[pid] && _nc[pid].date ? _nc[pid].date : new Date().toISOString().split("T")[0];
   _nc[pid] = {
-    date: new Date().toISOString().split("T")[0],
+    date: existingDate,
     items: NC_DEFAULT_TEMPLATE.map(t => ({
       cat: t.cat,
       subs: t.subs.map(s => ({ name: s, checked: false, checkedBy: null, checkedAt: null }))
