@@ -2038,7 +2038,7 @@ const _msalConfig = {
   auth: {
     clientId:    SP_CONFIG.clientId,
     authority:   `https://login.microsoftonline.com/${SP_CONFIG.tenantId}`,
-    redirectUri: "https://aakashsontakke456-pixel.github.io/godavari-portal/project-manager-v28.html",
+    redirectUri: window.location.origin + window.location.pathname, // dynamic — works on any host
   },
   cache: { cacheLocation: "sessionStorage" }
 };
@@ -2051,6 +2051,7 @@ const _msalLoginRequest = {
 let _msalInstance = null;
 let _msalReady = false;
 let _msalUser = null;   // Azure AD account object
+let _isSaving = false;  // Concurrent save guard
 
 // Initialize MSAL — called once on page load
 
@@ -2103,7 +2104,7 @@ function accessDeniedGoBack() {
   const loginScreen = document.getElementById("loginScreen");
   if(loginScreen) loginScreen.style.display = "flex";
   const btn = document.getElementById("msal-signin-btn");
-  if(btn) { btn.disabled = false; btn.innerHTML = \`<svg width="20" height="20" viewBox="0 0 23 23" xmlns="http://www.w3.org/2000/svg"><rect x="1" y="1" width="10" height="10" fill="#f25022"/><rect x="12" y="1" width="10" height="10" fill="#7fba00"/><rect x="1" y="12" width="10" height="10" fill="#00a4ef"/><rect x="12" y="12" width="10" height="10" fill="#ffb900"/></svg> Sign in with Microsoft\`; }
+  if(btn) { btn.disabled = false; btn.innerHTML = `<svg width="20" height="20" viewBox="0 0 23 23" xmlns="http://www.w3.org/2000/svg"><rect x="1" y="1" width="10" height="10" fill="#f25022"/><rect x="12" y="1" width="10" height="10" fill="#7fba00"/><rect x="1" y="12" width="10" height="10" fill="#00a4ef"/><rect x="12" y="12" width="10" height="10" fill="#ffb900"/></svg> Sign in with Microsoft`; }
   const status = document.getElementById("msal-status");
   if(status) status.textContent = "Choose a different Microsoft account.";
   // Re-init MSAL so button works again
@@ -2211,9 +2212,16 @@ async function getMsalToken() {
   try {
     const result = await _msalInstance.acquireTokenSilent({ ..._msalLoginRequest, account: _msalUser });
     return result.accessToken;
-  } catch(e) {
-    const result = await _msalInstance.acquireTokenPopup(_msalLoginRequest);
-    return result.accessToken;
+  } catch(silentErr) {
+    console.warn("Silent token acquisition failed, trying popup:", silentErr.message);
+    try {
+      const result = await _msalInstance.acquireTokenPopup(_msalLoginRequest);
+      return result.accessToken;
+    } catch(popupErr) {
+      // Popup blocked or user cancelled — force re-login
+      console.error("Token popup failed:", popupErr.message);
+      throw new Error("Session expired. Please sign in again.");
+    }
   }
 }
 
@@ -2576,7 +2584,7 @@ async function spDeduplicateList(listName) {
   const token = await getMsalToken();
   const siteId = await spSiteId();
   const listId = await spListId(listName);
-  let url = `https://graph.microsoft.com/v1.0/sites/${siteId}/lists/${listId}/items?expand=fields&$top=500`;
+  let url = `https://graph.microsoft.com/v1.0/sites/${siteId}/lists/${listId}/items?expand=fields&$top=999`;
   let items = [];
   while(url) {
     const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
@@ -2692,20 +2700,22 @@ async function spFindByTitle(listName, title) {
   const token = await getMsalToken();
   const siteId = await spSiteId();
   const listId = await spListId(listName);
-  // Fetch all items and filter client-side (more reliable than $filter)
-  // Use $select to minimize payload
-  const r = await fetch(
-    `https://graph.microsoft.com/v1.0/sites/${siteId}/lists/${listId}/items?expand=fields($select=Title)&$top=999`,
-    { headers: { Authorization: `Bearer ${token}` } }
-  );
-  if(!r.ok) return null;
-  const data = await r.json();
-  const items = data.value || [];
-  // Populate cache while we have the data
+  // Fetch ALL pages (handles lists with >999 items) and filter client-side
   if(!_spItemCache[listName]) _spItemCache[listName] = {};
-  items.forEach(i => { if(i.fields?.Title) _spItemCache[listName][i.fields.Title] = i.id; });
-  const found = items.find(i => i.fields?.Title === title);
-  return found || null;
+  let url = `https://graph.microsoft.com/v1.0/sites/${siteId}/lists/${listId}/items?expand=fields($select=Title)&$top=999`;
+  while(url) {
+    const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if(!r.ok) return null;
+    const data = await r.json();
+    const items = data.value || [];
+    items.forEach(i => { if(i.fields?.Title) _spItemCache[listName][i.fields.Title] = i.id; });
+    // Early exit if found (avoids fetching remaining pages)
+    if(_spItemCache[listName][title]) {
+      return { id: _spItemCache[listName][title], fields: { Title: title } };
+    }
+    url = data["@odata.nextLink"] || null;
+  }
+  return null;
 }
 
 // Item ID cache: listName -> { title -> spItemId }
@@ -3004,14 +3014,14 @@ async function spPushAll(db) {
 }
 
 /* ── Keep-alive: refresh MSAL token every 8 min to prevent expiry ── */
-async function keepAlive() {
-  if(!_msalUser) return;
+async async function keepAlive() {
+  if(!_msalUser || !_msalInstance) return;
   try { await getMsalToken(); } catch(e) { console.warn("Token refresh failed:", e); }
 }
 setInterval(keepAlive, 8 * 60 * 1000);   // 8 minutes
 
 /* ── Background auto-sync every 30 s — keeps all team members in sync ── */
-setInterval(()=>{ if(serverOK && currentUser && _msalUser) syncFromServer(true); }, 30000);
+setInterval(()=>{ if(serverOK && currentUser && _msalUser && document.visibilityState !== 'hidden') syncFromServer(true); }, 30000);
 
 // ═══════════════════════════════════════════
 // Load users from SharePoint PM_Users list
@@ -3575,6 +3585,9 @@ function openModal() {
 function closeModal() { document.getElementById("modalOverlay").classList.remove("open"); }
 
 async function saveProject() {
+  if(_isSaving) { showToast("⏳ Save in progress, please wait..."); return; }
+  _isSaving = true;
+  setTimeout(()=>{ _isSaving=false; }, 8000); // auto-release after 8s
   const name = document.getElementById("fName").value.trim();
   if(!name){ showToast("⚠️ Project name required!"); return; }
   // Get selected leader name
