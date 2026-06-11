@@ -2078,27 +2078,66 @@ function showAccessDeniedPopup(email, name) {
           <div style="display:inline-block;background:#fff5f5;border:1px solid #feb2b2;color:#c53030;font-size:13px;font-weight:600;padding:6px 14px;border-radius:20px;margin:10px 0 20px;word-break:break-all;">${email||"Unknown account"}</div>
           <div style="font-size:13px;color:#777;margin-bottom:28px;">This app is restricted to approved users only.<br>Contact your administrator to request access.</div>
           <button onclick="accessDeniedSignOut()" style="background:#e53e3e;color:#fff;border:none;padding:13px 32px;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;width:100%;">🔒 Sign Out &amp; Try Different Account</button>
-          <button onclick="window.location.reload()" style="background:transparent;color:#888;border:1px solid #ddd;padding:11px 32px;border-radius:10px;font-size:14px;cursor:pointer;width:100%;margin-top:10px;">↩ Go Back</button>
+          <button onclick="accessDeniedGoBack()" style="background:transparent;color:#888;border:1px solid #ddd;padding:11px 32px;border-radius:10px;font-size:14px;cursor:pointer;width:100%;margin-top:10px;">↩ Go Back</button>
         </div>
       </div>`);
   }
 }
 
-async function accessDeniedSignOut() {
-  document.getElementById("accessDeniedOverlay").classList.remove("open");
+function accessDeniedGoBack() {
+  // Clear MSAL state so login screen shows fresh
   sessionStorage.clear();
-  localStorage.removeItem("msal.account.keys");
+  try {
+    Object.keys(sessionStorage).forEach(k => { if(k.startsWith("msal.")) sessionStorage.removeItem(k); });
+    Object.keys(localStorage).forEach(k => { if(k.startsWith("msal.")) localStorage.removeItem(k); });
+  } catch(e) {}
+  _msalUser = null;
+  _msalInstance = null;
+  _msalReady = false;
+  // Hide overlay and show login screen
+  const overlay = document.getElementById("accessDeniedOverlay");
+  if(overlay) overlay.style.display = "none";
+  document.querySelectorAll("[style]").forEach(el => {
+    if(el.style.display === "none" && (el.id === "loginScreen")) el.style.display = "flex";
+  });
+  const loginScreen = document.getElementById("loginScreen");
+  if(loginScreen) loginScreen.style.display = "flex";
+  const btn = document.getElementById("msal-signin-btn");
+  if(btn) { btn.disabled = false; btn.innerHTML = \`<svg width="20" height="20" viewBox="0 0 23 23" xmlns="http://www.w3.org/2000/svg"><rect x="1" y="1" width="10" height="10" fill="#f25022"/><rect x="12" y="1" width="10" height="10" fill="#7fba00"/><rect x="1" y="12" width="10" height="10" fill="#00a4ef"/><rect x="12" y="12" width="10" height="10" fill="#ffb900"/></svg> Sign in with Microsoft\`; }
+  const status = document.getElementById("msal-status");
+  if(status) status.textContent = "Choose a different Microsoft account.";
+  // Re-init MSAL so button works again
+  setTimeout(initMsal, 300);
+}
+
+async function accessDeniedSignOut() {
+  // Safely hide overlay (may be the injected fallback or the real overlay)
+  const overlay = document.getElementById("accessDeniedOverlay");
+  if(overlay) overlay.style.display = "none";
+  // Clear all MSAL session data
+  sessionStorage.clear();
+  try { localStorage.removeItem("msal.account.keys"); } catch(e) {}
+  try {
+    // Clear all MSAL cache keys
+    Object.keys(localStorage).filter(k => k.startsWith("msal.")).forEach(k => {
+      try { localStorage.removeItem(k); } catch(e) {}
+    });
+    Object.keys(sessionStorage).filter(k => k.startsWith("msal.")).forEach(k => {
+      try { sessionStorage.removeItem(k); } catch(e) {}
+    });
+  } catch(e) {}
+  _msalUser = null;
+  _msalReady = false;
   if(_msalInstance) {
     try {
       await _msalInstance.logoutRedirect({
         postLogoutRedirectUri: window.location.origin + window.location.pathname
       });
-    } catch(e) {
-      window.location.reload();
-    }
-  } else {
-    window.location.reload();
+      return;
+    } catch(e) { console.warn("logoutRedirect failed:", e); }
   }
+  // Fallback: hard reload to clear everything
+  window.location.href = window.location.origin + window.location.pathname;
 }
 
 async function initMsal() {
@@ -2646,18 +2685,27 @@ async function spDeleteItem(listName, spItemId) {
 
 // Find SharePoint item id by Title field
 async function spFindByTitle(listName, title) {
+  // First check memory cache (fastest, avoids API call)
+  if(_spItemCache[listName] && _spItemCache[listName][title]) {
+    return { id: _spItemCache[listName][title], fields: { Title: title } };
+  }
   const token = await getMsalToken();
   const siteId = await spSiteId();
   const listId = await spListId(listName);
-  // Use proper OData filter — Title is always the internal field name in SharePoint
-  const filter = `fields/Title eq '${title.replace(/'/g, "''")}'`;
+  // Fetch all items and filter client-side (more reliable than $filter)
+  // Use $select to minimize payload
   const r = await fetch(
-    `https://graph.microsoft.com/v1.0/sites/${siteId}/lists/${listId}/items?expand=fields&$filter=${encodeURIComponent(filter)}&$top=1`,
+    `https://graph.microsoft.com/v1.0/sites/${siteId}/lists/${listId}/items?expand=fields($select=Title)&$top=999`,
     { headers: { Authorization: `Bearer ${token}` } }
   );
   if(!r.ok) return null;
   const data = await r.json();
-  return data.value && data.value.length ? data.value[0] : null;
+  const items = data.value || [];
+  // Populate cache while we have the data
+  if(!_spItemCache[listName]) _spItemCache[listName] = {};
+  items.forEach(i => { if(i.fields?.Title) _spItemCache[listName][i.fields.Title] = i.id; });
+  const found = items.find(i => i.fields?.Title === title);
+  return found || null;
 }
 
 // Item ID cache: listName -> { title -> spItemId }
