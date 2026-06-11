@@ -3014,7 +3014,7 @@ async function spPushAll(db) {
 }
 
 /* ── Keep-alive: refresh MSAL token every 8 min to prevent expiry ── */
-async async function keepAlive() {
+async function keepAlive() {
   if(!_msalUser || !_msalInstance) return;
   try { await getMsalToken(); } catch(e) { console.warn("Token refresh failed:", e); }
 }
