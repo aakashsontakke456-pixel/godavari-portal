@@ -3562,7 +3562,13 @@ async function spFieldsToSP(listName, fields) {
     const mapped = {};
     for (const [key, val] of Object.entries(fields)) {
         const spName = writeMap[key] || key;
-        mapped[spName] = val;
+        // Yes/No columns on this list reject native JSON booleans with a
+        // generalException — send as strings instead.
+        if (typeof val === "boolean" && (key === "FirstLogin" || key === "Activated" || key === "SignatureRevoked" || key === "ActivationReset")) {
+            mapped[spName] = val ? "1" : "0";
+        } else {
+            mapped[spName] = val;
+        }
     }
     return mapped;
 }
