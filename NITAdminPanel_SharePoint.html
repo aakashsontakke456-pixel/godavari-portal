@@ -3484,7 +3484,25 @@ async function spFindItem(listName, fieldName, value) {
     const siteId = await getSiteId();
     const listId = await getListId(listName);
     const encoded = encodeURIComponent(`fields/${fieldName} eq '${value}'`);
-    const data = await graphRequest("GET", `/sites/${siteId}/lists/${listId}/items?$expand=fields&$filter=${encoded}&$top=5`);
+    const token = await getToken();
+    const res = await fetch(
+        `${GRAPH}/sites/${siteId}/lists/${listId}/items?$expand=fields&$filter=${encoded}&$top=5`,
+        {
+            headers: {
+                Authorization: `Bearer ${token}`,
+                "Content-Type": "application/json",
+                "Prefer": "HonorNonIndexedQueriesWarningMayFailRandomly"
+            }
+        }
+    );
+    if (!res.ok) {
+        // Fallback: filtering on fields/ can fail for non-indexed columns even
+        // with the Prefer header — fall back to reading all items and filtering
+        // client-side (fine for small lists like GU_Settings).
+        const all = await spReadAll(listName);
+        return all.find(i => String(i[fieldName]) === String(value)) || null;
+    }
+    const data = await res.json();
     if (!data.value || data.value.length === 0) return null;
     return { _spId: data.value[0].id, ...data.value[0].fields };
 }
@@ -3505,18 +3523,21 @@ async function spUpdateItem(listName, spId, fields) {
 }
 
 // ── Read a setting from GU_Settings
+// Confirmed: "SettingKey" is a renamed display name for SharePoint's default
+// "Title" column — internal/Graph field name is "Title".
+const SETTING_KEY_FIELD = "Title";
 async function getSetting(key) {
-    const item = await spFindItem("GU_Settings", "SettingKey", key);
+    const item = await spFindItem("GU_Settings", SETTING_KEY_FIELD, key);
     return item ? item.SettingValue : null;
 }
 
 // ── Write/Update a setting in GU_Settings
 async function setSetting(key, value) {
-    const item = await spFindItem("GU_Settings", "SettingKey", key);
+    const item = await spFindItem("GU_Settings", SETTING_KEY_FIELD, key);
     if (item) {
         await spUpdateItem("GU_Settings", item._spId, { SettingValue: value });
     } else {
-        await spCreateItem("GU_Settings", { SettingKey: key, SettingValue: value });
+        await spCreateItem("GU_Settings", { [SETTING_KEY_FIELD]: key, SettingValue: value });
     }
 }
 
