@@ -2304,14 +2304,9 @@
 
     <div style="background:rgba(37,99,235,0.1);border:1px solid rgba(37,99,235,0.3);border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:0.78rem;color:#93c5fd;text-align:left;line-height:1.6;">
       <i class="fab fa-microsoft" style="margin-right:6px;"></i>
-      <strong>Step 1:</strong> Click Access System → Microsoft 365 sign-in popup will appear.<br>
-      <i class="fas fa-lock" style="margin-right:6px;margin-top:4px;display:inline-block;"></i>
-      <strong>Step 2:</strong> Enter your IT Admin password below (same as before).
-    </div>
-
-    <div class="login-input-wrap">
-      <i class="fas fa-lock input-icon"></i>
-      <input type="password" id="adminPass" placeholder="Enter Admin Password" onkeydown="if(event.key==='Enter') doAdminLogin()">
+      <strong>Sign in with your Godavari Urban Microsoft 365 account.</strong><br>
+      <i class="fas fa-shield-alt" style="margin-right:6px;margin-top:4px;display:inline-block;"></i>
+      Access is restricted to authorized IT admin accounts only.
     </div>
 
     <div id="loginErr" style="display:none;"><i class="fas fa-exclamation-circle"></i> Incorrect admin password.</div>
@@ -3068,25 +3063,30 @@ Fill the form on the left to preview the registration email that will be sent to
         <div class="hash-result" id="hashResult"></div>
       </div>
 
-      <!-- Reset Admin Password Hash -->
+      <!-- Admin Access Management -->
       <div class="card" style="border-top:3px solid var(--yellow);">
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
           <div style="width:36px;height:36px;border-radius:10px;background:rgba(217,119,6,0.12);display:grid;place-items:center;flex-shrink:0;">
             <i class="fas fa-user-shield" style="color:var(--yellow);font-size:0.95rem;"></i>
           </div>
           <div>
-            <div style="font-weight:700;font-size:0.92rem;color:var(--white);">Admin Password Hash</div>
-            <div style="font-size:0.73rem;color:var(--muted);">Generate & update admin password hash</div>
+            <div style="font-weight:700;font-size:0.92rem;color:var(--white);">Admin Access</div>
+            <div style="font-size:0.73rem;color:var(--muted);">Who can sign in to this panel</div>
           </div>
         </div>
         <hr style="border:none;border-top:1px solid var(--border);margin:14px 0;">
-        <div class="form-group" style="margin-bottom:10px;">
-          <label>New Admin Password</label>
-          <input type="password" id="newAdminPass" placeholder="Enter new admin password" style="padding:11px 14px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:0.9rem;font-family:'IBM Plex Sans',sans-serif;width:100%;">
-        </div>
-        <button class="btn btn-yellow" onclick="generateAdminHash()" style="margin-top:4px;"><i class="fas fa-key"></i> Generate Hash</button>
-        <div class="hash-result" id="adminHashResult"></div>
-        <p style="font-size:0.72rem;color:var(--muted);margin-top:10px;line-height:1.5;"><i class="fas fa-info-circle"></i> Copy hash → paste in Settings sheet → ADMIN_PASS_HASH row, column A.</p>
+        <p style="font-size:0.8rem;color:var(--text);line-height:1.6;">
+          Access to this IT Admin Panel is controlled by Microsoft 365 sign-in.
+          Only accounts whose email address is listed in the
+          <strong>GU_Admins</strong> SharePoint list (column: <strong>Email</strong>)
+          can log in.
+        </p>
+        <p style="font-size:0.72rem;color:var(--muted);margin-top:10px;line-height:1.5;">
+          <i class="fas fa-info-circle"></i> To add or remove an admin, edit the
+          <strong>GU_Admins</strong> list directly in SharePoint — add or remove
+          rows with the admin's Microsoft 365 email address in the
+          <strong>Email</strong> column.
+        </p>
       </div>
 
     </div>
@@ -3558,19 +3558,21 @@ async function logJourney(branch, empId, empName, post, allowedIP, status, actio
 async function callScript(payload) {
     switch (payload.action) {
 
-        // ── Verify admin password (login)
+        // ── Verify admin access via Microsoft 365 email allow-list (GU_Admins list)
         case "adminResetSig": {
-            const storedHash = await getSetting("ADMIN_PASS_HASH");
-            if (!storedHash) return { ok: false, msg: "ADMIN_PASS_HASH not set in GU_Settings list." };
-            const match = storedHash.trim().toLowerCase() === String(payload.adminPassHash || "").trim().toLowerCase();
-            return { ok: match, msg: match ? "Authenticated" : "Incorrect admin password." };
+            const email = String(payload.adminEmail || "").trim().toLowerCase();
+            if (!email) return { ok: false, msg: "No Microsoft 365 account email found." };
+            const admins = await spReadAll("GU_Admins");
+            const match = admins.some(a => String(a.Email || "").trim().toLowerCase() === email);
+            return { ok: match, msg: match ? "Authenticated" : "Access denied: this Microsoft 365 account is not an authorized IT admin." };
         }
 
         // ── Load all data for the panel
         case "getAllBranches": {
-            // Verify admin first
-            const storedHash = await getSetting("ADMIN_PASS_HASH");
-            const adminOk = storedHash && storedHash.trim().toLowerCase() === String(payload.adminHash || "").trim().toLowerCase();
+            // Verify admin via email allow-list (sessionStorage "adminHash" now holds the admin's email)
+            const email = String(payload.adminHash || "").trim().toLowerCase();
+            const admins = await spReadAll("GU_Admins");
+            const adminOk = email && admins.some(a => String(a.Email || "").trim().toLowerCase() === email);
             if (!adminOk) return { ok: false, msg: "Session expired or unauthorized." };
 
             const [branches, history, journey] = await Promise.all([
@@ -3962,8 +3964,15 @@ document.getElementById("modalOkBtn").onclick = async () => {
     if (pendingConfirmRequiresPassword) {
         const passInput = document.getElementById("modalAdminPass");
         const passError = document.getElementById("modalPasswordError");
-        const passHash = await sha256(passInput.value || "");
-        if (passHash !== sessionStorage.getItem("adminHash")) {
+        const entered = (passInput && passInput.value) || "";
+        const adminEmail = (sessionStorage.getItem("adminHash") || "").trim().toLowerCase();
+        let valid = false;
+        try {
+            const admins = await spReadAll("GU_Admins");
+            const me = admins.find(a => String(a.Email || "").trim().toLowerCase() === adminEmail);
+            valid = !!me && String(me.Password || "") === entered;
+        } catch (e) { valid = false; }
+        if (!valid) {
             if (passError) passError.style.display = "block";
             if (passInput) passInput.focus();
             return;
@@ -3994,8 +4003,6 @@ function switchTab(name) {
 //  LOGIN / LOGOUT
 // ═══════════════════════════════════════════════════════════
 async function doAdminLogin() {
-    const pass = document.getElementById("adminPass").value;
-    if (!pass) return;
     const btn = document.getElementById("loginBtn");
     btn.disabled = true;
     btn.innerHTML = '<i class="fas fa-spinner spin"></i> &nbsp;Initializing...';
@@ -4016,21 +4023,23 @@ async function doAdminLogin() {
             });
             account = result.account;
         }
-        btn.innerHTML = '<i class="fas fa-spinner spin"></i> &nbsp;Verifying admin password...';
+        btn.innerHTML = '<i class="fas fa-spinner spin"></i> &nbsp;Checking admin access...';
 
-        // Step 2: Verify admin password against GU_Settings (same as before)
-        const hash = await sha256(pass);
-        const res = await callScript({ action: "adminResetSig", adminPassHash: hash });
+        // Step 2: Verify the signed-in Microsoft 365 account is an authorized admin
+        const email = (account.username || "").trim().toLowerCase();
+        const res = await callScript({ action: "adminResetSig", adminEmail: email });
         if (!res.ok) {
-            errEl.innerText = "❌ " + (res.msg || "Incorrect admin password.");
+            errEl.innerText = "❌ " + (res.msg || "Access denied.");
             errEl.style.display = "block";
             btn.disabled = false;
-            btn.innerHTML = '<i class="fas fa-terminal"></i> &nbsp;Access System';
+            btn.innerHTML = '<i class="fab fa-microsoft"></i> &nbsp;Sign in with Microsoft 365';
+            // Sign out so a different account can be tried next time
+            msalInstance.logoutPopup({ account }).catch(() => {});
             return;
         }
 
         btn.innerHTML = '<i class="fas fa-check"></i> &nbsp;Authenticated!';
-        sessionStorage.setItem("adminHash", hash);
+        sessionStorage.setItem("adminHash", email);
         sessionStorage.setItem("adminLoginTime", Date.now());
         sessionStorage.setItem("adminUser", account.name || account.username);
 
@@ -4043,7 +4052,7 @@ async function doAdminLogin() {
         document.getElementById("mainApp").style.flexDirection = "column";
 
         setDataLoading(true);
-        const dataRes = await callScript({ action: "getAllBranches", adminHash: hash })
+        const dataRes = await callScript({ action: "getAllBranches", adminHash: email })
             .catch(e => ({ ok: false, msg: e.message }));
         applyBranchesResponse(dataRes);
         startAdminSessionTimer();
@@ -4053,7 +4062,7 @@ async function doAdminLogin() {
         errEl.style.display = "block";
         setDataLoading(false);
         btn.disabled = false;
-        btn.innerHTML = '<i class="fas fa-terminal"></i> &nbsp;Access System';
+        btn.innerHTML = '<i class="fab fa-microsoft"></i> &nbsp;Sign in with Microsoft 365';
     }
 }
 
@@ -5637,16 +5646,6 @@ async function generateHash() {
     navigator.clipboard.writeText(h).then(() => toast("Hash copied to clipboard!"));
 }
 
-async function generateAdminHash() {
-    const val = document.getElementById("newAdminPass").value;
-    if (!val) return;
-    const h = await sha256(val);
-    const el = document.getElementById("adminHashResult");
-    el.innerText = h;
-    el.style.display = "block";
-    navigator.clipboard.writeText(h).then(() => toast("Admin hash copied! Paste into GU_Settings list."));
-}
-
 function buildToolBranchOptions() {
     const branches = [...allBranches].sort((a, b) =>
         String(a.Branch || "").localeCompare(String(b.Branch || ""))
@@ -5748,7 +5747,8 @@ async function transferManager() {
                 loadAllData();
             } catch(e) { toast("Network error", "error"); }
         },
-        '<i class="fas fa-right-left"></i> Confirm Transfer'
+        '<i class="fas fa-right-left"></i> Confirm Transfer',
+        true
     );
 }
 
@@ -6094,7 +6094,8 @@ async function removeSecondaryBranch(secIdx) {
                 }
             } catch(e) { toast("Network error", "error"); }
         },
-        `<i class="fas fa-trash-alt"></i> Confirm Remove`
+        `<i class="fas fa-trash-alt"></i> Confirm Remove`,
+        true
     );
 }
 
@@ -6169,7 +6170,9 @@ async function managerChanged() {
             } catch(e) {
                 toast("Network error", "error");
             }
-        }
+        },
+        '<i class="fas fa-user-shield"></i> Confirm',
+        true
     );
 }
 </script>
