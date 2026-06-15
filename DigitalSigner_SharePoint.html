@@ -563,33 +563,73 @@ async function _getListId(listName) {
     return _listIdCache[listName];
 }
 
-// ── FIELD MAPPING: SharePoint's first column is always "Title" internally.
-//    GU_Branches, GU_BranchJourney store Branch name in that column.
+// ── FIELD MAPPING ──────────────────────────────────────────────────────────────
+// SharePoint CSV export confirms Yes/No columns have "🟡 " prefix in display names:
+//   GU_Branches:    "🟡 SignatureRevoked", "🟡 FirstLogin", "🟡 Activated"
+//   GU_ManagerHist: "🟡 SignatureRevoked",  "🟡 ActivationReset"
+// The first column (Branch/Title) maps to SharePoint's built-in "Title" field.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Fields whose SharePoint display name differs from the code name
+const _SP_FIELD_MAP = {
+    "Branch":            "Title",
+    "SignatureRevoked":  "🟡 SignatureRevoked",
+    "FirstLogin":        "🟡 FirstLogin",
+    "Activated":         "🟡 Activated",
+    "ActivationReset":   "🟡 ActivationReset"
+};
+const _SP_FIELD_RMAP = Object.fromEntries(Object.entries(_SP_FIELD_MAP).map(([k,v]) => [v,k]));
+
+// GU_Branches, GU_BranchJourney, GU_ManagerHist store Branch as SharePoint Title
 const _SP_TITLE_LISTS = ["GU_Branches", "GU_BranchJourney", "GU_ManagerHist"];
 
 function _spToSP(listName, fields) {
-    if (!_SP_TITLE_LISTS.includes(listName) || !fields.hasOwnProperty("Branch")) return fields;
-    const m = { ...fields }; m.Title = m.Branch; delete m.Branch; return m;
+    const mapped = {};
+    for (const [key, val] of Object.entries(fields)) {
+        if (key === "Branch" && _SP_TITLE_LISTS.includes(listName)) {
+            mapped["Title"] = val;
+        } else {
+            mapped[_SP_FIELD_MAP[key] || key] = val;
+        }
+    }
+    return mapped;
 }
 function _spFromSP(listName, fields) {
-    if (!_SP_TITLE_LISTS.includes(listName)) return fields;
-    const m = { ...fields };
-    if (m.hasOwnProperty("Title") && !m.hasOwnProperty("Branch")) m.Branch = m.Title;
-    return m;
+    const mapped = {};
+    for (const [key, val] of Object.entries(fields)) {
+        const codeName = _SP_FIELD_RMAP[key] || key;
+        mapped[codeName] = val;
+    }
+    if (_SP_TITLE_LISTS.includes(listName) && mapped.hasOwnProperty("Title") && !mapped.hasOwnProperty("Branch")) {
+        mapped.Branch = mapped.Title;
+    }
+    return mapped;
 }
 function _spFieldName(listName, fieldName) {
     return (_SP_TITLE_LISTS.includes(listName) && fieldName === "Branch") ? "Title" : fieldName;
 }
 
-// ── Find a single item by field value
-async function _spFind(listName, fieldName, value) {
+// ── Read ALL items from a list (handles pagination)
+// NOTE: SharePoint internally renames custom columns (e.g. EmpID → field_1),
+// so $filter on display names fails silently. We fetch all and filter client-side.
+async function _spGetAll(listName) {
     const siteId = await _getSiteId();
     const listId = await _getListId(listName);
-    const mappedField = _spFieldName(listName, fieldName);
-    const enc    = encodeURIComponent(`fields/${mappedField} eq '${value}'`);
-    const d      = await _graph("GET", `/sites/${siteId}/lists/${listId}/items?$expand=fields&$filter=${enc}&$top=5`);
-    if (!d.value?.length) return null;
-    return { _id: d.value[0].id, ..._spFromSP(listName, d.value[0].fields) };
+    let endpoint = `/sites/${siteId}/lists/${listId}/items?$expand=fields&$top=999`;
+    let items = [];
+    while (endpoint) {
+        const d = await _graph("GET", endpoint);
+        items = items.concat((d.value || []).map(i => ({ _id: i.id, ..._spFromSP(listName, i.fields) })));
+        endpoint = d["@odata.nextLink"] ? d["@odata.nextLink"].replace(GRAPH, "") : null;
+    }
+    return items;
+}
+
+// ── Find a single item by field value (always client-side — avoids internal SP field name mismatch)
+async function _spFind(listName, fieldName, value) {
+    const all = await _spGetAll(listName);
+    const found = all.find(i => String(i[fieldName] ?? "").trim() === String(value ?? "").trim());
+    return found || null;
 }
 
 // ── Update a list item

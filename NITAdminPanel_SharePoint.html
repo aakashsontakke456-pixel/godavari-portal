@@ -3464,31 +3464,59 @@ async function getListId(listName) {
     return data.value[0].id;
 }
 
-// ── Read ALL items from a SharePoint list (handles pagination)
-// ── FIELD MAPPING: SharePoint's first column is always "Title" internally.
-//    These lists store the Branch name in that column, so we map Branch↔Title.
+// ── FIELD MAPPING ──────────────────────────────────────────────────────────────
+// SharePoint exports confirm two naming quirks:
+//   1. The "Title" column stores Branch name (first column of list)
+//   2. Yes/No columns are prefixed with "🟡 " in SharePoint display names:
+//        GU_Branches:   "🟡 SignatureRevoked", "🟡 FirstLogin", "🟡 Activated"
+//        GU_ManagerHist:"🟡 SignatureRevoked",  "🟡 ActivationReset"
+//
+// SP_FIELD_MAP:  code name → SharePoint display name  (for WRITE)
+// SP_FIELD_RMAP: SharePoint display name → code name  (for READ)
+// ─────────────────────────────────────────────────────────────────────────────
+
 const SP_TITLE_LISTS = ["GU_Branches", "GU_BranchJourney", "GU_ManagerHist"];
 
-// Convert outgoing fields: Branch → Title (for write operations)
+// Fields whose SharePoint display name differs from the code name
+const SP_FIELD_MAP = {
+    "Branch":            "Title",           // Branch stored as Title (first col)
+    "SignatureRevoked":  "🟡 SignatureRevoked",
+    "FirstLogin":        "🟡 FirstLogin",
+    "Activated":         "🟡 Activated",
+    "ActivationReset":   "🟡 ActivationReset"
+};
+// Reverse map: SharePoint name → code name
+const SP_FIELD_RMAP = Object.fromEntries(Object.entries(SP_FIELD_MAP).map(([k,v]) => [v,k]));
+
+// Convert outgoing fields (code → SP) for write operations
 function spFieldsToSP(listName, fields) {
-    if (!SP_TITLE_LISTS.includes(listName) || !fields.hasOwnProperty("Branch")) return fields;
-    const mapped = { ...fields };
-    mapped.Title = mapped.Branch;
-    delete mapped.Branch;
+    const mapped = {};
+    for (const [key, val] of Object.entries(fields)) {
+        // Only map Branch→Title for lists that use Title as Branch
+        if (key === "Branch" && SP_TITLE_LISTS.includes(listName)) {
+            mapped["Title"] = val;
+        } else {
+            mapped[SP_FIELD_MAP[key] || key] = val;
+        }
+    }
     return mapped;
 }
 
-// Convert incoming fields: Title → Branch (for read operations)
+// Convert incoming fields (SP → code) for read operations
 function spFieldsFromSP(listName, fields) {
-    if (!SP_TITLE_LISTS.includes(listName)) return fields;
-    const mapped = { ...fields };
-    if (mapped.hasOwnProperty("Title") && !mapped.hasOwnProperty("Branch")) {
+    const mapped = {};
+    for (const [key, val] of Object.entries(fields)) {
+        const codeName = SP_FIELD_RMAP[key] || key;
+        mapped[codeName] = val;
+    }
+    // Also map Title → Branch for lists that use it
+    if (SP_TITLE_LISTS.includes(listName) && mapped.hasOwnProperty("Title") && !mapped.hasOwnProperty("Branch")) {
         mapped.Branch = mapped.Title;
     }
     return mapped;
 }
 
-// Convert fieldName used in spFindItem: "Branch" → "Title" for SP_TITLE_LISTS
+// Convert fieldName for spFindItem: "Branch" → "Title" for SP_TITLE_LISTS (legacy, kept for safety)
 function spFieldName(listName, fieldName) {
     if (SP_TITLE_LISTS.includes(listName) && fieldName === "Branch") return "Title";
     return fieldName;
@@ -3509,30 +3537,12 @@ async function spReadAll(listName, selectFields = null) {
 }
 
 // ── Find one item by field value
+// NOTE: SharePoint internally renames custom columns (e.g. EmpID → field_1),
+// so $filter on display names fails silently (returns 0 results, not an error).
+// We always fetch all items and filter client-side to guarantee correct matching.
 async function spFindItem(listName, fieldName, value) {
-    const siteId = await getSiteId();
-    const listId = await getListId(listName);
-    const mappedField = spFieldName(listName, fieldName);
-    const encoded = encodeURIComponent(`fields/${mappedField} eq '${value}'`);
-    const token = await getToken();
-    const res = await fetch(
-        `${GRAPH}/sites/${siteId}/lists/${listId}/items?$expand=fields&$filter=${encoded}&$top=5`,
-        {
-            headers: {
-                Authorization: `Bearer ${token}`,
-                "Content-Type": "application/json",
-                "Prefer": "HonorNonIndexedQueriesWarningMayFailRandomly"
-            }
-        }
-    );
-    if (!res.ok) {
-        // Fallback: read all and filter client-side
-        const all = await spReadAll(listName);
-        return all.find(i => String(i[fieldName]) === String(value)) || null;
-    }
-    const data = await res.json();
-    if (!data.value || data.value.length === 0) return null;
-    return { _spId: data.value[0].id, ...spFieldsFromSP(listName, data.value[0].fields) };
+    const all = await spReadAll(listName);
+    return all.find(i => String(i[fieldName] ?? "").trim() === String(value ?? "").trim()) || null;
 }
 
 // ── Create a new list item
