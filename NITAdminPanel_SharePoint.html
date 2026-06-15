@@ -3465,6 +3465,35 @@ async function getListId(listName) {
 }
 
 // ── Read ALL items from a SharePoint list (handles pagination)
+// ── FIELD MAPPING: SharePoint's first column is always "Title" internally.
+//    These lists store the Branch name in that column, so we map Branch↔Title.
+const SP_TITLE_LISTS = ["GU_Branches", "GU_BranchJourney", "GU_ManagerHist"];
+
+// Convert outgoing fields: Branch → Title (for write operations)
+function spFieldsToSP(listName, fields) {
+    if (!SP_TITLE_LISTS.includes(listName) || !fields.hasOwnProperty("Branch")) return fields;
+    const mapped = { ...fields };
+    mapped.Title = mapped.Branch;
+    delete mapped.Branch;
+    return mapped;
+}
+
+// Convert incoming fields: Title → Branch (for read operations)
+function spFieldsFromSP(listName, fields) {
+    if (!SP_TITLE_LISTS.includes(listName)) return fields;
+    const mapped = { ...fields };
+    if (mapped.hasOwnProperty("Title") && !mapped.hasOwnProperty("Branch")) {
+        mapped.Branch = mapped.Title;
+    }
+    return mapped;
+}
+
+// Convert fieldName used in spFindItem: "Branch" → "Title" for SP_TITLE_LISTS
+function spFieldName(listName, fieldName) {
+    if (SP_TITLE_LISTS.includes(listName) && fieldName === "Branch") return "Title";
+    return fieldName;
+}
+
 async function spReadAll(listName, selectFields = null) {
     const siteId = await getSiteId();
     const listId = await getListId(listName);
@@ -3473,7 +3502,7 @@ async function spReadAll(listName, selectFields = null) {
     let items = [];
     while (url) {
         const data = await graphRequest("GET", url.startsWith("/sites") ? url : url.replace(GRAPH, ""));
-        items = items.concat((data.value || []).map(i => ({ _spId: i.id, ...i.fields })));
+        items = items.concat((data.value || []).map(i => ({ _spId: i.id, ...spFieldsFromSP(listName, i.fields) })));
         url = data["@odata.nextLink"] ? data["@odata.nextLink"].replace(GRAPH, "") : null;
     }
     return items;
@@ -3483,7 +3512,8 @@ async function spReadAll(listName, selectFields = null) {
 async function spFindItem(listName, fieldName, value) {
     const siteId = await getSiteId();
     const listId = await getListId(listName);
-    const encoded = encodeURIComponent(`fields/${fieldName} eq '${value}'`);
+    const mappedField = spFieldName(listName, fieldName);
+    const encoded = encodeURIComponent(`fields/${mappedField} eq '${value}'`);
     const token = await getToken();
     const res = await fetch(
         `${GRAPH}/sites/${siteId}/lists/${listId}/items?$expand=fields&$filter=${encoded}&$top=5`,
@@ -3496,30 +3526,30 @@ async function spFindItem(listName, fieldName, value) {
         }
     );
     if (!res.ok) {
-        // Fallback: filtering on fields/ can fail for non-indexed columns even
-        // with the Prefer header — fall back to reading all items and filtering
-        // client-side (fine for small lists like GU_Settings).
+        // Fallback: read all and filter client-side
         const all = await spReadAll(listName);
         return all.find(i => String(i[fieldName]) === String(value)) || null;
     }
     const data = await res.json();
     if (!data.value || data.value.length === 0) return null;
-    return { _spId: data.value[0].id, ...data.value[0].fields };
+    return { _spId: data.value[0].id, ...spFieldsFromSP(listName, data.value[0].fields) };
 }
 
 // ── Create a new list item
 async function spCreateItem(listName, fields) {
     const siteId = await getSiteId();
     const listId = await getListId(listName);
-    const data = await graphRequest("POST", `/sites/${siteId}/lists/${listId}/items`, { fields });
-    return { _spId: data.id, ...data.fields };
+    const mappedFields = spFieldsToSP(listName, fields);
+    const data = await graphRequest("POST", `/sites/${siteId}/lists/${listId}/items`, { fields: mappedFields });
+    return { _spId: data.id, ...spFieldsFromSP(listName, data.fields || {}) };
 }
 
 // ── Update an existing list item by its SP item ID
 async function spUpdateItem(listName, spId, fields) {
     const siteId = await getSiteId();
     const listId = await getListId(listName);
-    await graphRequest("PATCH", `/sites/${siteId}/lists/${listId}/items/${spId}/fields`, fields);
+    const mappedFields = spFieldsToSP(listName, fields);
+    await graphRequest("PATCH", `/sites/${siteId}/lists/${listId}/items/${spId}/fields`, mappedFields);
 }
 
 // ── Read a setting from GU_Settings

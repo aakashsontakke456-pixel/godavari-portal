@@ -563,29 +563,48 @@ async function _getListId(listName) {
     return _listIdCache[listName];
 }
 
+// ── FIELD MAPPING: SharePoint's first column is always "Title" internally.
+//    GU_Branches, GU_BranchJourney store Branch name in that column.
+const _SP_TITLE_LISTS = ["GU_Branches", "GU_BranchJourney", "GU_ManagerHist"];
+
+function _spToSP(listName, fields) {
+    if (!_SP_TITLE_LISTS.includes(listName) || !fields.hasOwnProperty("Branch")) return fields;
+    const m = { ...fields }; m.Title = m.Branch; delete m.Branch; return m;
+}
+function _spFromSP(listName, fields) {
+    if (!_SP_TITLE_LISTS.includes(listName)) return fields;
+    const m = { ...fields };
+    if (m.hasOwnProperty("Title") && !m.hasOwnProperty("Branch")) m.Branch = m.Title;
+    return m;
+}
+function _spFieldName(listName, fieldName) {
+    return (_SP_TITLE_LISTS.includes(listName) && fieldName === "Branch") ? "Title" : fieldName;
+}
+
 // ── Find a single item by field value
 async function _spFind(listName, fieldName, value) {
     const siteId = await _getSiteId();
     const listId = await _getListId(listName);
-    const enc    = encodeURIComponent(`fields/${fieldName} eq '${value}'`);
+    const mappedField = _spFieldName(listName, fieldName);
+    const enc    = encodeURIComponent(`fields/${mappedField} eq '${value}'`);
     const d      = await _graph("GET", `/sites/${siteId}/lists/${listId}/items?$expand=fields&$filter=${enc}&$top=5`);
     if (!d.value?.length) return null;
-    return { _id: d.value[0].id, ...d.value[0].fields };
+    return { _id: d.value[0].id, ..._spFromSP(listName, d.value[0].fields) };
 }
 
 // ── Update a list item
 async function _spPatch(listName, spId, fields) {
     const siteId = await _getSiteId();
     const listId = await _getListId(listName);
-    await _graph("PATCH", `/sites/${siteId}/lists/${listId}/items/${spId}/fields`, fields);
+    await _graph("PATCH", `/sites/${siteId}/lists/${listId}/items/${spId}/fields`, _spToSP(listName, fields));
 }
 
 // ── Create a list item
 async function _spPost(listName, fields) {
     const siteId = await _getSiteId();
     const listId = await _getListId(listName);
-    const d = await _graph("POST", `/sites/${siteId}/lists/${listId}/items`, { fields });
-    return { _id: d.id, ...d.fields };
+    const d = await _graph("POST", `/sites/${siteId}/lists/${listId}/items`, { fields: _spToSP(listName, fields) });
+    return { _id: d.id, ..._spFromSP(listName, d.fields || {}) };
 }
 
 // ── Append to BranchJourney log
