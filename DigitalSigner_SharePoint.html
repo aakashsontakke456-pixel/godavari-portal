@@ -607,57 +607,34 @@ const _SP_WRITE_MAP_SETTINGS = {
     "SettingValue": "field_1"
 };
 
-// Dynamic write map cache for BranchJourney (fetched at runtime via /columns)
-const _dynWriteMapCache = {};
+// GU_BranchJourney confirmed write map
+// Fields: Branch(Title), Timestamp, EmpID, EmpName, Post, AllowedIP, Status, Action, Details, ChangedBy
+const _SP_WRITE_MAP_BRANCHJOURNEY = {
+    "Branch":     "Title",
+    "Timestamp":  "field_1",
+    "EmpID":      "field_2",
+    "EmpName":    "field_3",
+    "Post":       "field_4",
+    "AllowedIP":  "field_5",
+    "Status":     "field_6",
+    "Action":     "field_7",
+    "Details":    "field_8",
+    "ChangedBy":  "field_9"
+};
 
-// SharePoint read-only internal field names — never include in POST/PATCH payloads
-const _SP_READONLY_FIELDS = new Set([
-    "LinkTitle", "LinkTitleNoMenu", "LinkFilename", "LinkFilenameNoMenu",
-    "DocIcon", "ItemChildCount", "FolderChildCount", "Edit", "SelectTitle",
-    "SelectFilename", "FileLeafRef", "FileDirRef", "FileRef",
-    "ContentTypeId", "Modified", "Created", "Author", "Editor",
-    "CheckoutUser", "_UIVersionString", "ID", "owshiddenversion",
-    "_ModerationStatus", "_ModerationComments", "InstanceID",
-    "Order", "GUID", "UniqueId", "SortBehavior", "ParentLeafName",
-    "ParentVersionString", "ProgId", "ScopeId", "TemplateUrl",
-    "xd_ProgID", "xd_Signature", "MetaInfo", "Attachments",
-    "_ComplianceFlags", "_ComplianceTag", "_ComplianceTagWrittenTime",
-    "_ComplianceTagUserId", "_IsRecord", "AppAuthor", "AppEditor"
-]);
-
-async function _fetchWriteMap(listName) {
-    if (_dynWriteMapCache[listName]) return _dynWriteMapCache[listName];
-    const siteId = await _getSiteId();
-    const listId = await _getListId(listName);
-    const data = await _graph("GET", `/sites/${siteId}/lists/${listId}/columns`);
-    const map = { "Branch": "Title" };
-    for (const col of (data.value || [])) {
-        if (col.displayName && col.name) {
-            if (_SP_READONLY_FIELDS.has(col.name)) continue;
-            if (col.readOnly) continue;
-            const codeName = col.displayName.replace(/^🟡\s*/, "");
-            if (map.hasOwnProperty(codeName)) continue;
-            map[codeName] = col.name;
-        }
-    }
-    _dynWriteMapCache[listName] = map;
-    return map;
-}
-
-async function _getWriteMap(listName) {
-    if (listName === "GU_Branches") return _SP_WRITE_MAP_BRANCHES;
-    if (listName === "GU_Settings") return _SP_WRITE_MAP_SETTINGS;
-    return await _fetchWriteMap(listName);
+function _getWriteMap(listName) {
+    if (listName === "GU_Branches")      return _SP_WRITE_MAP_BRANCHES;
+    if (listName === "GU_Settings")      return _SP_WRITE_MAP_SETTINGS;
+    if (listName === "GU_BranchJourney") return _SP_WRITE_MAP_BRANCHJOURNEY;
+    return {};
 }
 
 // Convert outgoing fields (code → internal SP names) for PATCH/POST
 async function _spToSP(listName, fields) {
-    const writeMap = await _getWriteMap(listName);
+    const writeMap = _getWriteMap(listName);
     const mapped = {};
     for (const [key, val] of Object.entries(fields)) {
-        const spName = writeMap[key] || key;
-        if (_SP_READONLY_FIELDS.has(spName)) continue; // skip read-only system fields
-        mapped[spName] = val;
+        mapped[writeMap[key] || key] = val;
     }
     return mapped;
 }
