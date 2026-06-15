@@ -609,6 +609,22 @@ const _SP_WRITE_MAP_SETTINGS = {
 
 // Dynamic write map cache for BranchJourney (fetched at runtime via /columns)
 const _dynWriteMapCache = {};
+
+// SharePoint read-only internal field names — never include in POST/PATCH payloads
+const _SP_READONLY_FIELDS = new Set([
+    "LinkTitle", "LinkTitleNoMenu", "LinkFilename", "LinkFilenameNoMenu",
+    "DocIcon", "ItemChildCount", "FolderChildCount", "Edit", "SelectTitle",
+    "SelectFilename", "FileLeafRef", "FileDirRef", "FileRef",
+    "ContentTypeId", "Modified", "Created", "Author", "Editor",
+    "CheckoutUser", "_UIVersionString", "ID", "owshiddenversion",
+    "_ModerationStatus", "_ModerationComments", "InstanceID",
+    "Order", "GUID", "UniqueId", "SortBehavior", "ParentLeafName",
+    "ParentVersionString", "ProgId", "ScopeId", "TemplateUrl",
+    "xd_ProgID", "xd_Signature", "MetaInfo", "Attachments",
+    "_ComplianceFlags", "_ComplianceTag", "_ComplianceTagWrittenTime",
+    "_ComplianceTagUserId", "_IsRecord", "AppAuthor", "AppEditor"
+]);
+
 async function _fetchWriteMap(listName) {
     if (_dynWriteMapCache[listName]) return _dynWriteMapCache[listName];
     const siteId = await _getSiteId();
@@ -633,19 +649,6 @@ async function _getWriteMap(listName) {
     if (listName === "GU_Settings") return _SP_WRITE_MAP_SETTINGS;
     return await _fetchWriteMap(listName);
 }
-
-// SharePoint read-only internal field names — never include in POST/PATCH payloads
-const _SP_READONLY_FIELDS = new Set([
-    "LinkTitle", "LinkTitleNoMenu", "LinkFilename", "LinkFilenameNoMenu",
-    "DocIcon", "ItemChildCount", "FolderChildCount", "Edit", "SelectTitle",
-    "SelectFilename", "FileLeafRef", "FileDirRef", "FileRef",
-    "ContentTypeId", "Modified", "Created", "Author", "Editor",
-    "CheckoutUser", "_UIVersionString", "ID", "owshiddenversion",
-    "_ModerationStatus", "_ModerationComments", "InstanceID",
-    "Order", "GUID", "UniqueId", "SortBehavior", "ParentLeafName",
-    "ParentVersionString", "ProgId", "ScopeId", "TemplateUrl",
-    "xd_ProgID", "xd_Signature", "MetaInfo", "Attachments"
-]);
 
 // Convert outgoing fields (code → internal SP names) for PATCH/POST
 async function _spToSP(listName, fields) {
