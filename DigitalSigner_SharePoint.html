@@ -617,8 +617,11 @@ async function _fetchWriteMap(listName) {
     const map = { "Branch": "Title" };
     for (const col of (data.value || [])) {
         if (col.displayName && col.name) {
-            if (col.readOnly) continue; // skip read-only system columns
-            map[col.displayName.replace(/^🟡\s*/, "")] = col.name;
+            if (_SP_READONLY_FIELDS.has(col.name)) continue;
+            if (col.readOnly) continue;
+            const codeName = col.displayName.replace(/^🟡\s*/, "");
+            if (map.hasOwnProperty(codeName)) continue;
+            map[codeName] = col.name;
         }
     }
     _dynWriteMapCache[listName] = map;

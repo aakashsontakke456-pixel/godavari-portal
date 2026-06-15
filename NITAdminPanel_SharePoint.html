@@ -3517,10 +3517,14 @@ async function _fetchWriteMap(listName) {
     const map = SP_TITLE_LISTS.includes(listName) ? { "Branch": "Title" } : {};
     for (const col of (data.value || [])) {
         if (col.displayName && col.name) {
-            // Skip read-only system columns — posting to these causes "Field is read-only" errors
+            // Skip if internal name is a known read-only system field
+            // (col.readOnly is unreliable — LinkTitle is not flagged readOnly by SP API)
+            if (SP_READONLY_FIELDS.has(col.name)) continue;
             if (col.readOnly) continue;
-            // Strip 🟡 prefix from Yes/No display names to match our code names
+            // Strip emoji prefix from Yes/No display names to match our code names
             const codeName = col.displayName.replace(/^🟡\s*/, "");
+            // Never overwrite hardcoded mappings (e.g. Branch -> Title)
+            if (map.hasOwnProperty(codeName)) continue;
             map[codeName] = col.name;
         }
     }
