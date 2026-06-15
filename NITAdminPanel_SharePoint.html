@@ -3368,18 +3368,10 @@ const GRAPH = "https://graph.microsoft.com/v1.0";
 const SP_SITE_PATH = `/sites/${SHAREPOINT_HOST}:/sites/${SHAREPOINT_SITE_NAME}`;
 
 // ── MSAL Configuration
-// Create an inline blank page for MSAL popup redirect (avoids localhost connection error)
-const _blankRedirectUri = (() => {
-    try {
-        const blob = new Blob(
-            ['<!DOCTYPE html><html><head><title>Auth</title></head><body><script>window.opener && window.opener.postMessage && window.close()<\/script></body></html>'],
-            { type: "text/html" }
-        );
-        return URL.createObjectURL(blob);
-    } catch(e) {
-        return "http://localhost"; // fallback
-    }
-})();
+// Use the admin panel's own URL as the popup redirect URI — it's already
+// registered in Azure AD (no separate redirect.html needed). MSAL detects the
+// auth response via handleRedirectPromise() on load and resolves automatically.
+const _blankRedirectUri = "https://aakashsontakke456-pixel.github.io/godavari-portal/NITAdminPanel_SharePoint.html";
 
 const msalConfig = {
     auth: {
