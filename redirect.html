@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Authenticating...</title>
+  <meta charset="utf-8" />
+  <style>
+    body { font-family: sans-serif; display: flex; align-items: center;
+           justify-content: center; height: 100vh; margin: 0;
+           background: #0f1923; color: #8899aa; }
+    p { font-size: 14px; }
+  </style>
+</head>
+<body>
+  <p>Completing sign-in, please wait...</p>
+
+  <!--
+    MSAL Popup Redirect Handler
+    ===========================
+    This page is the redirect target for MSAL popup login flows.
+    It loads MSAL, calls handleRedirectPromise(), which reads the
+    auth code/token from the URL, posts it back to the parent window,
+    then closes this popup automatically.
+
+    Upload this file to:
+    https://aakashsontakke456-pixel.github.io/godavari-portal/redirect.html
+
+    And register that URL in Azure App Registration → Authentication
+    → Single-page application → Add Redirect URI.
+  -->
+
+  <script src="https://alcdn.msauth.net/browser/2.38.3/js/msal-browser.min.js"></script>
+  <script>
+    (async () => {
+      try {
+        const msalInstance = new msal.PublicClientApplication({
+          auth: {
+            clientId: "106f2386-db75-436c-8e08-21c2ea14958e",
+            authority: "https://login.microsoftonline.com/e47e4128-1c1b-4510-a440-415145dc1cde",
+            redirectUri: window.location.href.split("?")[0].split("#")[0]
+          },
+          cache: { cacheLocation: "sessionStorage", storeAuthStateInCookie: true }
+        });
+        await msalInstance.initialize();
+        await msalInstance.handleRedirectPromise();
+        // MSAL has now processed the response and posted it back to the opener.
+        // The popup will close automatically.
+        window.close();
+      } catch (e) {
+        // If something fails, still try to close.
+        console.error("MSAL redirect error:", e);
+        window.close();
+      }
+    })();
+  </script>
+</body>
+</html>
