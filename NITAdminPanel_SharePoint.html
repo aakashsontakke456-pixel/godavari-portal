@@ -3497,70 +3497,71 @@ async function getListId(listName) {
 
 const SP_TITLE_LISTS = ["GU_Branches", "GU_BranchJourney", "GU_ManagerHist"];
 
-// GU_Settings uses standard Title column for SettingKey — no custom mapping needed
+// ── Hardcoded write maps using actual SharePoint internal field names ──────────
+// Internal names confirmed from /columns API response (field_N = creation order).
+// Using hardcoded maps avoids hitting /columns at runtime and prevents read-only
+// system fields (LinkTitle, Editor, etc.) from ever entering the payload.
+
 const SP_WRITE_MAP_SETTINGS = {
-    "SettingKey":   "Title",
+    "SettingKey":   "Title",       // Standard SP Title column
     "SettingValue": "field_1"
 };
 
-// Dynamic write map cache — populated at runtime via /columns endpoint
-// All lists (including GU_Branches) use dynamic discovery to avoid
-// hardcoded field_N mismatches when columns were created in a different order.
-const _dynamicWriteMapCache = {};
+const SP_WRITE_MAP_BRANCHES = {
+    "Branch":             "Title",     // SP built-in first column
+    "EmpID":              "field_1",
+    "EmpName":            "field_2",
+    "Post":               "field_3",
+    "AllowedIP":          "field_4",
+    "PassHash":           "field_5",
+    "ActKeyHash":         "field_6",
+    "ActKey":             "field_7",
+    "BranchEmail":        "field_8",
+    "WorkstationStatus":  "field_9",
+    "ManagerStatus":      "field_10",
+    "AppEmailSentAt":     "field_11",
+    "AuthRequestedAt":    "field_12",
+    "AuthorizedAt":       "field_13",
+    "PrimaryEmpID":       "field_14",
+    "SignatureRevoked":   "field_15",
+    "SignatureVersion":   "field_16",
+    "SignatureRevokedAt": "field_17",
+    "FirstLogin":         "field_18",
+    "Activated":          "field_19",
+    "ActivationReset":    "field_20",
+    "ColorTag":           "field_21"
+};
 
-// SharePoint read-only internal field names — never include in POST/PATCH payloads
-const SP_READONLY_FIELDS = new Set([
-    "LinkTitle", "LinkTitleNoMenu", "LinkFilename", "LinkFilenameNoMenu",
-    "DocIcon", "ItemChildCount", "FolderChildCount", "Edit", "SelectTitle",
-    "SelectFilename", "FileLeafRef", "FileDirRef", "FileRef",
-    "ContentTypeId", "Modified", "Created", "Author", "Editor",
-    "CheckoutUser", "_UIVersionString", "ID", "owshiddenversion",
-    "_ModerationStatus", "_ModerationComments", "InstanceID",
-    "Order", "GUID", "UniqueId", "SortBehavior", "ParentLeafName",
-    "ParentVersionString", "ProgId", "ScopeId", "TemplateUrl",
-    "xd_ProgID", "xd_Signature", "MetaInfo", "Attachments",
-    "_ComplianceFlags", "_ComplianceTag", "_ComplianceTagWrittenTime",
-    "_ComplianceTagUserId", "_IsRecord", "AppAuthor", "AppEditor"
-]);
+// NOTE: GU_BranchJourney and GU_ManagerHist field_N order not yet confirmed.
+// Passing display names directly — Graph API accepts display names for custom
+// columns as long as they don't clash with system field names. If writes fail,
+// run: console.table(await (await fetch(graphUrl+'/columns',{headers:{Authorization:'Bearer '+token}})).json()) 
+// to get actual field_N order and hardcode below.
+const SP_WRITE_MAP_BRANCHJOURNEY = {
+    "Branch":     "Title"
+    // All other fields passed by display name (Timestamp, EmpID, EmpName, etc.)
+};
 
-async function _fetchWriteMap(listName) {
-    if (_dynamicWriteMapCache[listName]) return _dynamicWriteMapCache[listName];
-    const siteId = await getSiteId();
-    const listId = await getListId(listName);
-    const data = await graphRequest("GET", `/sites/${siteId}/lists/${listId}/columns`);
-    // Start with the Title → Branch mapping for all title-based lists
-    const map = SP_TITLE_LISTS.includes(listName) ? { "Branch": "Title" } : {};
-    for (const col of (data.value || [])) {
-        if (col.displayName && col.name) {
-            // Skip if internal name is a known read-only system field
-            // (col.readOnly is unreliable — LinkTitle is not flagged readOnly by SP API)
-            if (SP_READONLY_FIELDS.has(col.name)) continue;
-            if (col.readOnly) continue;
-            // Strip emoji prefix from Yes/No display names to match our code names
-            const codeName = col.displayName.replace(/^🟡\s*/, "");
-            // Never overwrite hardcoded mappings (e.g. Branch -> Title)
-            if (map.hasOwnProperty(codeName)) continue;
-            map[codeName] = col.name;
-        }
-    }
-    _dynamicWriteMapCache[listName] = map;
-    return map;
-}
+const SP_WRITE_MAP_MANAGERHIST = {
+    "Branch":     "Title"
+    // All other fields passed by display name (Timestamp, OldEmpID, Action, etc.)
+};
 
-async function _getWriteMap(listName) {
-    if (listName === "GU_Settings") return SP_WRITE_MAP_SETTINGS;
-    // All other lists (GU_Branches, GU_BranchJourney, GU_ManagerHist) —
-    // discover actual internal field names at runtime to avoid field_N mismatch.
-    return await _fetchWriteMap(listName);
+function _getWriteMap(listName) {
+    if (listName === "GU_Settings")      return SP_WRITE_MAP_SETTINGS;
+    if (listName === "GU_Branches")      return SP_WRITE_MAP_BRANCHES;
+    if (listName === "GU_BranchJourney") return SP_WRITE_MAP_BRANCHJOURNEY;
+    if (listName === "GU_ManagerHist")   return SP_WRITE_MAP_MANAGERHIST;
+    // Unknown list — return empty map (field names passed through as-is)
+    return {};
 }
 
 // Convert outgoing fields (code names → internal SP names) for POST/PATCH
 async function spFieldsToSP(listName, fields) {
-    const writeMap = await _getWriteMap(listName);
+    const writeMap = _getWriteMap(listName);
     const mapped = {};
     for (const [key, val] of Object.entries(fields)) {
         const spName = writeMap[key] || key;
-        if (SP_READONLY_FIELDS.has(spName)) continue; // skip read-only system fields
         mapped[spName] = val;
     }
     return mapped;
