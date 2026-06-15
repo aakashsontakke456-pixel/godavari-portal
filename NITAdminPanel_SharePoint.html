@@ -3368,22 +3368,24 @@ const GRAPH = "https://graph.microsoft.com/v1.0";
 const SP_SITE_PATH = `/sites/${SHAREPOINT_HOST}:/sites/${SHAREPOINT_SITE_NAME}`;
 
 // ── MSAL Configuration
-// The app can run from file:// (local) OR from GitHub Pages (https://).
-// When running from file://, Chrome blocks cross-origin popup messaging.
-// Solution: register NITAdminPanel on GitHub Pages so both parent and popup
-// are on the same https:// origin — no cross-origin issue.
-const _GH_BASE = "https://aakashsontakke456-pixel.github.io/godavari-portal/";
-const _popupRedirectUri = _GH_BASE + "redirect.html";
-// Main redirectUri: if running from file://, point to GitHub Pages copy of this app
-const _mainRedirectUri = window.location.protocol === "file:"
-    ? _GH_BASE + "NITAdminPanel_SharePoint.html"
-    : window.location.href.split("?")[0].split("#")[0];
+// Create an inline blank page for MSAL popup redirect (avoids localhost connection error)
+const _blankRedirectUri = (() => {
+    try {
+        const blob = new Blob(
+            ['<!DOCTYPE html><html><head><title>Auth</title></head><body><script>window.opener && window.opener.postMessage && window.close()<\/script></body></html>'],
+            { type: "text/html" }
+        );
+        return URL.createObjectURL(blob);
+    } catch(e) {
+        return "http://localhost"; // fallback
+    }
+})();
 
 const msalConfig = {
     auth: {
         clientId: CLIENT_ID,
         authority: `https://login.microsoftonline.com/${TENANT_ID}`,
-        redirectUri: _mainRedirectUri,
+        redirectUri: "http://localhost",
         navigateToLoginRequestUrl: false
     },
     cache: { cacheLocation: "sessionStorage", storeAuthStateInCookie: true },
@@ -3427,10 +3429,10 @@ async function getToken(scopeOverride) {
         _msalToken = result.accessToken;
         return _msalToken;
     } catch (e) {
-        // Silent failed — use popup with http://localhost redirect (registered in Azure as SPA)
+        // Silent failed — use popup with blob redirect so no localhost error
         const result = await msalInstance.acquireTokenPopup({
             scopes,
-            redirectUri: _popupRedirectUri
+            redirectUri: _blankRedirectUri
         });
         _msalToken = result.accessToken;
         return _msalToken;
@@ -3997,7 +3999,7 @@ async function doAdminLogin() {
         if (!account) {
             const result = await msalInstance.loginPopup({
                 scopes: LOGIN_SCOPES,
-                redirectUri: _popupRedirectUri  // = "http://localhost", registered as SPA in Azure
+                redirectUri: _blankRedirectUri  // popup closes cleanly — no localhost server needed
             });
             account = result.account;
         }
