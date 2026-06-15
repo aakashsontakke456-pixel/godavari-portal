@@ -617,6 +617,7 @@ async function _fetchWriteMap(listName) {
     const map = { "Branch": "Title" };
     for (const col of (data.value || [])) {
         if (col.displayName && col.name) {
+            if (col.readOnly) continue; // skip read-only system columns
             map[col.displayName.replace(/^🟡\s*/, "")] = col.name;
         }
     }
@@ -630,12 +631,27 @@ async function _getWriteMap(listName) {
     return await _fetchWriteMap(listName);
 }
 
+// SharePoint read-only internal field names — never include in POST/PATCH payloads
+const _SP_READONLY_FIELDS = new Set([
+    "LinkTitle", "LinkTitleNoMenu", "LinkFilename", "LinkFilenameNoMenu",
+    "DocIcon", "ItemChildCount", "FolderChildCount", "Edit", "SelectTitle",
+    "SelectFilename", "FileLeafRef", "FileDirRef", "FileRef",
+    "ContentTypeId", "Modified", "Created", "Author", "Editor",
+    "CheckoutUser", "_UIVersionString", "ID", "owshiddenversion",
+    "_ModerationStatus", "_ModerationComments", "InstanceID",
+    "Order", "GUID", "UniqueId", "SortBehavior", "ParentLeafName",
+    "ParentVersionString", "ProgId", "ScopeId", "TemplateUrl",
+    "xd_ProgID", "xd_Signature", "MetaInfo", "Attachments"
+]);
+
 // Convert outgoing fields (code → internal SP names) for PATCH/POST
 async function _spToSP(listName, fields) {
     const writeMap = await _getWriteMap(listName);
     const mapped = {};
     for (const [key, val] of Object.entries(fields)) {
-        mapped[writeMap[key] || key] = val;
+        const spName = writeMap[key] || key;
+        if (_SP_READONLY_FIELDS.has(spName)) continue; // skip read-only system fields
+        mapped[spName] = val;
     }
     return mapped;
 }
@@ -1697,13 +1713,6 @@ async function downloadPDF() {
     showDownloadToast(fileName);
 }
 
-function showDownloadToast(fileName) {
-    const toast = document.getElementById('downloadToast');
-    document.getElementById('downloadToastMsg').textContent = 'PDF Saved: ' + fileName;
-    toast.classList.add('show');
-    clearTimeout(toast._t);
-    toast._t = setTimeout(() => toast.classList.remove('show'), 4500);
-}
 </script>
 </body>
 </html>

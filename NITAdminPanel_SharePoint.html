@@ -3517,6 +3517,8 @@ async function _fetchWriteMap(listName) {
     const map = SP_TITLE_LISTS.includes(listName) ? { "Branch": "Title" } : {};
     for (const col of (data.value || [])) {
         if (col.displayName && col.name) {
+            // Skip read-only system columns — posting to these causes "Field is read-only" errors
+            if (col.readOnly) continue;
             // Strip 🟡 prefix from Yes/No display names to match our code names
             const codeName = col.displayName.replace(/^🟡\s*/, "");
             map[codeName] = col.name;
@@ -3533,12 +3535,27 @@ async function _getWriteMap(listName) {
     return await _fetchWriteMap(listName);
 }
 
+// SharePoint read-only internal field names — never include in POST/PATCH payloads
+const SP_READONLY_FIELDS = new Set([
+    "LinkTitle", "LinkTitleNoMenu", "LinkFilename", "LinkFilenameNoMenu",
+    "DocIcon", "ItemChildCount", "FolderChildCount", "Edit", "SelectTitle",
+    "SelectFilename", "FileLeafRef", "FileDirRef", "FileRef",
+    "ContentTypeId", "Modified", "Created", "Author", "Editor",
+    "CheckoutUser", "_UIVersionString", "ID", "owshiddenversion",
+    "_ModerationStatus", "_ModerationComments", "InstanceID",
+    "Order", "GUID", "UniqueId", "SortBehavior", "ParentLeafName",
+    "ParentVersionString", "ProgId", "ScopeId", "TemplateUrl",
+    "xd_ProgID", "xd_Signature", "MetaInfo", "Attachments"
+]);
+
 // Convert outgoing fields (code names → internal SP names) for POST/PATCH
 async function spFieldsToSP(listName, fields) {
     const writeMap = await _getWriteMap(listName);
     const mapped = {};
     for (const [key, val] of Object.entries(fields)) {
-        mapped[writeMap[key] || key] = val;
+        const spName = writeMap[key] || key;
+        if (SP_READONLY_FIELDS.has(spName)) continue; // skip read-only system fields
+        mapped[spName] = val;
     }
     return mapped;
 }
