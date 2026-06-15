@@ -3495,7 +3495,7 @@ async function getListId(listName) {
 // WRITE (POST/PATCH fields) requires internal names — mapped below.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const SP_TITLE_LISTS = ["GU_Branches", "GU_BranchJourney", "GU_ManagerHist"];
+const SP_TITLE_LISTS = ["GU_Branches", "GU_ManagerHist"];
 
 // ── Hardcoded write maps using actual SharePoint internal field names ──────────
 // Internal names confirmed from /columns API response (field_N = creation order).
@@ -3538,8 +3538,16 @@ const SP_WRITE_MAP_BRANCHES = {
 // run: console.table(await (await fetch(graphUrl+'/columns',{headers:{Authorization:'Bearer '+token}})).json()) 
 // to get actual field_N order and hardcode below.
 const SP_WRITE_MAP_BRANCHJOURNEY = {
-    "Branch":     "Title"
-    // All other fields passed by display name (Timestamp, EmpID, EmpName, etc.)
+    "Timestamp": "Title",
+    "Branch":    "field_1",
+    "EmpID":     "field_2",
+    "EmpName":   "field_3",
+    "Post":      "field_4",
+    "AllowedIP": "field_5",
+    "Status":    "field_6",
+    "Action":    "field_7",
+    "Details":   "field_8",
+    "ChangedBy": "field_9"
 };
 
 const SP_WRITE_MAP_MANAGERHIST = {
@@ -3579,6 +3587,12 @@ function spFieldsFromSP(listName, fields) {
     const mapped = { ...fields };
     if (SP_TITLE_LISTS.includes(listName) && mapped.hasOwnProperty("Title") && !mapped.hasOwnProperty("Branch")) {
         mapped.Branch = mapped.Title;
+    }
+    // GU_BranchJourney stores Timestamp in the Title column (no dedicated
+    // Timestamp column exists on this list)
+    if (listName === "GU_BranchJourney" && mapped.hasOwnProperty("Title")) {
+        mapped.Timestamp = mapped.Title;
+        delete mapped.Title;
     }
     // Strip 🟡 prefix from Yes/No display names so code can use clean names
     const emojiFields = {
