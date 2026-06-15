@@ -3465,58 +3465,130 @@ async function getListId(listName) {
 }
 
 // ── FIELD MAPPING ──────────────────────────────────────────────────────────────
-// SharePoint exports confirm two naming quirks:
-//   1. The "Title" column stores Branch name (first column of list)
-//   2. Yes/No columns are prefixed with "🟡 " in SharePoint display names:
-//        GU_Branches:   "🟡 SignatureRevoked", "🟡 FirstLogin", "🟡 Activated"
-//        GU_ManagerHist:"🟡 SignatureRevoked",  "🟡 ActivationReset"
+// SharePoint Graph API uses INTERNAL field names for write operations (PATCH/POST).
+// Console inspection confirmed these internal names for GU_Branches:
 //
-// SP_FIELD_MAP:  code name → SharePoint display name  (for WRITE)
-// SP_FIELD_RMAP: SharePoint display name → code name  (for READ)
+//   Display name        Internal name (used in PATCH/POST)
+//   ──────────────────  ───────────────────────────────────
+//   Branch              Title          (SharePoint's built-in first column)
+//   EmpID               field_1
+//   EmpName             field_2
+//   Post                field_3
+//   AllowedIP           field_4
+//   PassHash            field_5
+//   ActKeyHash          field_6
+//   ActKey              field_7
+//   BranchEmail         field_8
+//   WorkstationStatus   field_9
+//   ManagerStatus       field_10
+//   AppEmailSentAt      field_11
+//   AuthRequestedAt     field_12
+//   AuthorizedAt        field_13
+//   PrimaryEmpID        field_14
+//   SignatureRevoked     field_15   (Yes/No — displayed as "🟡 SignatureRevoked")
+//   SignatureVersion     field_16
+//   SignatureRevokedAt   field_17
+//   FirstLogin           field_18   (Yes/No — displayed as "🟡 FirstLogin")
+//   Activated            field_19   (Yes/No — displayed as "🟡 Activated")
+//
+// READ (GET $expand=fields) returns display names, so we use code names directly.
+// WRITE (POST/PATCH fields) requires internal names — mapped below.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const SP_TITLE_LISTS = ["GU_Branches", "GU_BranchJourney", "GU_ManagerHist"];
 
-// Fields whose SharePoint display name differs from the code name
-const SP_FIELD_MAP = {
-    "Branch":            "Title",           // Branch stored as Title (first col)
-    "SignatureRevoked":  "🟡 SignatureRevoked",
-    "FirstLogin":        "🟡 FirstLogin",
-    "Activated":         "🟡 Activated",
-    "ActivationReset":   "🟡 ActivationReset"
+// GU_Branches: code name → internal SP field name (for WRITE)
+const SP_WRITE_MAP_BRANCHES = {
+    "Branch":             "Title",
+    "EmpID":              "field_1",
+    "EmpName":            "field_2",
+    "Post":               "field_3",
+    "AllowedIP":          "field_4",
+    "PassHash":           "field_5",
+    "ActKeyHash":         "field_6",
+    "ActKey":             "field_7",
+    "BranchEmail":        "field_8",
+    "WorkstationStatus":  "field_9",
+    "ManagerStatus":      "field_10",
+    "AppEmailSentAt":     "field_11",
+    "AuthRequestedAt":    "field_12",
+    "AuthorizedAt":       "field_13",
+    "PrimaryEmpID":       "field_14",
+    "SignatureRevoked":   "field_15",
+    "SignatureVersion":   "field_16",
+    "SignatureRevokedAt": "field_17",
+    "FirstLogin":         "field_18",
+    "Activated":          "field_19"
 };
-// Reverse map: SharePoint name → code name
-const SP_FIELD_RMAP = Object.fromEntries(Object.entries(SP_FIELD_MAP).map(([k,v]) => [v,k]));
 
-// Convert outgoing fields (code → SP) for write operations
-function spFieldsToSP(listName, fields) {
+// GU_Settings uses standard Title column for SettingKey — no custom mapping needed
+const SP_WRITE_MAP_SETTINGS = {
+    "SettingKey":   "Title",
+    "SettingValue": "field_1"
+};
+
+// Dynamic write map cache — populated at runtime via /columns endpoint
+// for lists whose field numbers we can't hard-code (BranchJourney, ManagerHist)
+const _dynamicWriteMapCache = {};
+
+async function _fetchWriteMap(listName) {
+    if (_dynamicWriteMapCache[listName]) return _dynamicWriteMapCache[listName];
+    const siteId = await getSiteId();
+    const listId = await getListId(listName);
+    const data = await graphRequest("GET", `/sites/${siteId}/lists/${listId}/columns`);
+    const map = { "Branch": "Title" };
+    for (const col of (data.value || [])) {
+        if (col.displayName && col.name) {
+            // Strip 🟡 prefix from Yes/No display names to match our code names
+            const codeName = col.displayName.replace(/^🟡\s*/, "");
+            map[codeName] = col.name;
+        }
+    }
+    _dynamicWriteMapCache[listName] = map;
+    return map;
+}
+
+async function _getWriteMap(listName) {
+    if (listName === "GU_Branches") return SP_WRITE_MAP_BRANCHES;
+    if (listName === "GU_Settings") return SP_WRITE_MAP_SETTINGS;
+    // BranchJourney and ManagerHist — discover field numbers at runtime
+    return await _fetchWriteMap(listName);
+}
+
+// Convert outgoing fields (code names → internal SP names) for POST/PATCH
+async function spFieldsToSP(listName, fields) {
+    const writeMap = await _getWriteMap(listName);
     const mapped = {};
     for (const [key, val] of Object.entries(fields)) {
-        // Only map Branch→Title for lists that use Title as Branch
-        if (key === "Branch" && SP_TITLE_LISTS.includes(listName)) {
-            mapped["Title"] = val;
-        } else {
-            mapped[SP_FIELD_MAP[key] || key] = val;
+        mapped[writeMap[key] || key] = val;
+    }
+    return mapped;
+}
+
+// READ: Graph $expand=fields returns display names which match our code names directly.
+// Only special case: Title → Branch for lists that store Branch as Title.
+function spFieldsFromSP(listName, fields) {
+    const mapped = { ...fields };
+    if (SP_TITLE_LISTS.includes(listName) && mapped.hasOwnProperty("Title") && !mapped.hasOwnProperty("Branch")) {
+        mapped.Branch = mapped.Title;
+    }
+    // Strip 🟡 prefix from Yes/No display names so code can use clean names
+    const emojiFields = {
+        "🟡 SignatureRevoked": "SignatureRevoked",
+        "🟡 FirstLogin":       "FirstLogin",
+        "🟡 Activated":        "Activated",
+        "🟡 ActivationReset":  "ActivationReset"
+    };
+    for (const [spName, codeName] of Object.entries(emojiFields)) {
+        if (mapped.hasOwnProperty(spName)) {
+            mapped[codeName] = mapped[spName];
+            delete mapped[spName];
         }
     }
     return mapped;
 }
 
-// Convert incoming fields (SP → code) for read operations
-function spFieldsFromSP(listName, fields) {
-    const mapped = {};
-    for (const [key, val] of Object.entries(fields)) {
-        const codeName = SP_FIELD_RMAP[key] || key;
-        mapped[codeName] = val;
-    }
-    // Also map Title → Branch for lists that use it
-    if (SP_TITLE_LISTS.includes(listName) && mapped.hasOwnProperty("Title") && !mapped.hasOwnProperty("Branch")) {
-        mapped.Branch = mapped.Title;
-    }
-    return mapped;
-}
-
-// Convert fieldName for spFindItem: "Branch" → "Title" for SP_TITLE_LISTS (legacy, kept for safety)
+// Legacy helper — kept for any remaining references
 function spFieldName(listName, fieldName) {
     if (SP_TITLE_LISTS.includes(listName) && fieldName === "Branch") return "Title";
     return fieldName;
@@ -3549,7 +3621,7 @@ async function spFindItem(listName, fieldName, value) {
 async function spCreateItem(listName, fields) {
     const siteId = await getSiteId();
     const listId = await getListId(listName);
-    const mappedFields = spFieldsToSP(listName, fields);
+    const mappedFields = await spFieldsToSP(listName, fields);
     const data = await graphRequest("POST", `/sites/${siteId}/lists/${listId}/items`, { fields: mappedFields });
     return { _spId: data.id, ...spFieldsFromSP(listName, data.fields || {}) };
 }
@@ -3558,7 +3630,7 @@ async function spCreateItem(listName, fields) {
 async function spUpdateItem(listName, spId, fields) {
     const siteId = await getSiteId();
     const listId = await getListId(listName);
-    const mappedFields = spFieldsToSP(listName, fields);
+    const mappedFields = await spFieldsToSP(listName, fields);
     await graphRequest("PATCH", `/sites/${siteId}/lists/${listId}/items/${spId}/fields`, mappedFields);
 }
 

@@ -564,54 +564,104 @@ async function _getListId(listName) {
 }
 
 // ── FIELD MAPPING ──────────────────────────────────────────────────────────────
-// SharePoint CSV export confirms Yes/No columns have "🟡 " prefix in display names:
-//   GU_Branches:    "🟡 SignatureRevoked", "🟡 FirstLogin", "🟡 Activated"
-//   GU_ManagerHist: "🟡 SignatureRevoked",  "🟡 ActivationReset"
-// The first column (Branch/Title) maps to SharePoint's built-in "Title" field.
+// SharePoint Graph API uses INTERNAL field names for write operations (PATCH/POST).
+// Console inspection confirmed GU_Branches internal names:
+//   Branch→Title, EmpID→field_1, EmpName→field_2, Post→field_3,
+//   AllowedIP→field_4, PassHash→field_5, ActKeyHash→field_6, ActKey→field_7,
+//   BranchEmail→field_8, WorkstationStatus→field_9, ManagerStatus→field_10,
+//   AppEmailSentAt→field_11, AuthRequestedAt→field_12, AuthorizedAt→field_13,
+//   PrimaryEmpID→field_14, SignatureRevoked→field_15, SignatureVersion→field_16,
+//   SignatureRevokedAt→field_17, FirstLogin→field_18, Activated→field_19
+// Yes/No columns also carry "🟡 " prefix in their display names.
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Fields whose SharePoint display name differs from the code name
-const _SP_FIELD_MAP = {
-    "Branch":            "Title",
-    "SignatureRevoked":  "🟡 SignatureRevoked",
-    "FirstLogin":        "🟡 FirstLogin",
-    "Activated":         "🟡 Activated",
-    "ActivationReset":   "🟡 ActivationReset"
-};
-const _SP_FIELD_RMAP = Object.fromEntries(Object.entries(_SP_FIELD_MAP).map(([k,v]) => [v,k]));
-
-// GU_Branches, GU_BranchJourney, GU_ManagerHist store Branch as SharePoint Title
 const _SP_TITLE_LISTS = ["GU_Branches", "GU_BranchJourney", "GU_ManagerHist"];
 
-function _spToSP(listName, fields) {
+// GU_Branches confirmed write map (code name → internal SP field name)
+const _SP_WRITE_MAP_BRANCHES = {
+    "Branch":             "Title",
+    "EmpID":              "field_1",
+    "EmpName":            "field_2",
+    "Post":               "field_3",
+    "AllowedIP":          "field_4",
+    "PassHash":           "field_5",
+    "ActKeyHash":         "field_6",
+    "ActKey":             "field_7",
+    "BranchEmail":        "field_8",
+    "WorkstationStatus":  "field_9",
+    "ManagerStatus":      "field_10",
+    "AppEmailSentAt":     "field_11",
+    "AuthRequestedAt":    "field_12",
+    "AuthorizedAt":       "field_13",
+    "PrimaryEmpID":       "field_14",
+    "SignatureRevoked":   "field_15",
+    "SignatureVersion":   "field_16",
+    "SignatureRevokedAt": "field_17",
+    "FirstLogin":         "field_18",
+    "Activated":          "field_19"
+};
+
+// GU_Settings: SettingKey is Title (first col), SettingValue is field_1
+const _SP_WRITE_MAP_SETTINGS = {
+    "SettingKey":   "Title",
+    "SettingValue": "field_1"
+};
+
+// Dynamic write map cache for BranchJourney (fetched at runtime via /columns)
+const _dynWriteMapCache = {};
+async function _fetchWriteMap(listName) {
+    if (_dynWriteMapCache[listName]) return _dynWriteMapCache[listName];
+    const siteId = await _getSiteId();
+    const listId = await _getListId(listName);
+    const data = await _graph("GET", `/sites/${siteId}/lists/${listId}/columns`);
+    const map = { "Branch": "Title" };
+    for (const col of (data.value || [])) {
+        if (col.displayName && col.name) {
+            map[col.displayName.replace(/^🟡\s*/, "")] = col.name;
+        }
+    }
+    _dynWriteMapCache[listName] = map;
+    return map;
+}
+
+async function _getWriteMap(listName) {
+    if (listName === "GU_Branches") return _SP_WRITE_MAP_BRANCHES;
+    if (listName === "GU_Settings") return _SP_WRITE_MAP_SETTINGS;
+    return await _fetchWriteMap(listName);
+}
+
+// Convert outgoing fields (code → internal SP names) for PATCH/POST
+async function _spToSP(listName, fields) {
+    const writeMap = await _getWriteMap(listName);
     const mapped = {};
     for (const [key, val] of Object.entries(fields)) {
-        if (key === "Branch" && _SP_TITLE_LISTS.includes(listName)) {
-            mapped["Title"] = val;
-        } else {
-            mapped[_SP_FIELD_MAP[key] || key] = val;
+        mapped[writeMap[key] || key] = val;
+    }
+    return mapped;
+}
+
+// Convert incoming fields (SP display names → code names) for GET reads
+function _spFromSP(listName, fields) {
+    const mapped = { ...fields };
+    // Title → Branch
+    if (_SP_TITLE_LISTS.includes(listName) && mapped.hasOwnProperty("Title") && !mapped.hasOwnProperty("Branch")) {
+        mapped.Branch = mapped.Title;
+    }
+    // Strip 🟡 prefix from Yes/No display names
+    for (const key of Object.keys(mapped)) {
+        if (key.startsWith("🟡 ")) {
+            mapped[key.replace(/^🟡\s*/, "")] = mapped[key];
+            delete mapped[key];
         }
     }
     return mapped;
 }
-function _spFromSP(listName, fields) {
-    const mapped = {};
-    for (const [key, val] of Object.entries(fields)) {
-        const codeName = _SP_FIELD_RMAP[key] || key;
-        mapped[codeName] = val;
-    }
-    if (_SP_TITLE_LISTS.includes(listName) && mapped.hasOwnProperty("Title") && !mapped.hasOwnProperty("Branch")) {
-        mapped.Branch = mapped.Title;
-    }
-    return mapped;
-}
+
 function _spFieldName(listName, fieldName) {
     return (_SP_TITLE_LISTS.includes(listName) && fieldName === "Branch") ? "Title" : fieldName;
 }
 
 // ── Read ALL items from a list (handles pagination)
-// NOTE: SharePoint internally renames custom columns (e.g. EmpID → field_1),
-// so $filter on display names fails silently. We fetch all and filter client-side.
 async function _spGetAll(listName) {
     const siteId = await _getSiteId();
     const listId = await _getListId(listName);
@@ -628,22 +678,21 @@ async function _spGetAll(listName) {
 // ── Find a single item by field value (always client-side — avoids internal SP field name mismatch)
 async function _spFind(listName, fieldName, value) {
     const all = await _spGetAll(listName);
-    const found = all.find(i => String(i[fieldName] ?? "").trim() === String(value ?? "").trim());
-    return found || null;
+    return all.find(i => String(i[fieldName] ?? "").trim() === String(value ?? "").trim()) || null;
 }
 
 // ── Update a list item
 async function _spPatch(listName, spId, fields) {
     const siteId = await _getSiteId();
     const listId = await _getListId(listName);
-    await _graph("PATCH", `/sites/${siteId}/lists/${listId}/items/${spId}/fields`, _spToSP(listName, fields));
+    await _graph("PATCH", `/sites/${siteId}/lists/${listId}/items/${spId}/fields`, await _spToSP(listName, fields));
 }
 
 // ── Create a list item
 async function _spPost(listName, fields) {
     const siteId = await _getSiteId();
     const listId = await _getListId(listName);
-    const d = await _graph("POST", `/sites/${siteId}/lists/${listId}/items`, { fields: _spToSP(listName, fields) });
+    const d = await _graph("POST", `/sites/${siteId}/lists/${listId}/items`, { fields: await _spToSP(listName, fields) });
     return { _id: d.id, ..._spFromSP(listName, d.fields || {}) };
 }
 
