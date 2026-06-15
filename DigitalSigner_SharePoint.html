@@ -1,0 +1,1607 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Godavari Urban – Internal Branch Document Authorization Tool</title>
+
+    <script src="https://unpkg.com/pdf-lib/dist/pdf-lib.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Microsoft MSAL (for SharePoint access — no M365 login required for branch users) -->
+    <script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@3.28.0/lib/msal-browser.min.js"></script>
+    <script>if(typeof msal==="undefined"){document.write('<scr'+'ipt src="https://unpkg.com/@azure/msal-browser@3.28.0/lib/msal-browser.min.js"><\/scr'+'ipt>');}</script>
+
+    <style>
+        :root {
+            --primary: #1e3a8a; --primary-dark: #172554; --accent: #3b82f6;
+            --bg: #f8fafc; --text: #1e293b; --white: #ffffff;
+            --danger: #ef4444; --success: #059669; --border: #e2e8f0;
+        }
+
+        * { box-sizing: border-box; }
+        body { margin: 0; font-family: 'Inter', 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); overflow: hidden; height: 100vh; }
+
+        @keyframes blink-green {
+            0% { color: var(--primary); }
+            50% { color: var(--success); text-shadow: 0 0 8px rgba(5,150,105,0.4); }
+            100% { color: var(--primary); }
+        }
+        #stnIP, #stnPublicIP, #stnBrowser { animation: blink-green 2s infinite ease-in-out; font-weight: bold; }
+        #stnIP:empty, #stnIP[data-empty="true"] { animation: none; color: #f59e0b; }
+
+        /* ── AUTH OVERLAY ── */
+        #authOverlay { position: fixed; inset: 0; background: #0f172a; display: flex; justify-content: center; align-items: center; z-index: 20000; color: white; }
+        .auth-box { background: #1e293b; padding: 40px; border-radius: 20px; border: 1px solid #334155; max-width: 460px; width: 90%; text-align: center; }
+        .auth-box input { width: 100%; padding: 12px; margin: 10px 0; border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: white; text-align: center; font-size: 1rem; }
+        .auth-box input:focus { outline: none; border-color: var(--accent); }
+        .loader-text { font-size: 0.8rem; color: #fbbf24; margin-top: 10px; display: none; }
+        #ipLabel { color: var(--accent); font-weight: bold; margin-bottom: 15px; display: block; font-family: monospace; font-size: 0.85rem; }
+        #reqIdBox { background: #0f172a; padding: 15px; border-radius: 10px; margin: 20px 0; border: 1px solid var(--success); text-align: left; }
+
+        /* ── LOGIN OVERLAY ── */
+        #loginOverlay { position: fixed; inset: 0; background: linear-gradient(135deg, var(--primary-dark) 0%, var(--primary) 100%); display: none; justify-content: center; align-items: center; z-index: 9999; }
+        .login-box { background: var(--white); padding: 40px; width: 100%; max-width: 420px; border-radius: 16px; text-align: center; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5); }
+        .login-box h2 { color: var(--primary); margin-bottom: 5px; font-size: 1.4rem; }
+        .login-box p { color: #64748b; margin-top: 0; font-size: 0.9rem; margin-bottom: 10px; }
+        .login-box input { width: 100%; padding: 14px; margin: 12px 0; border: 2px solid #e2e8f0; border-radius: 10px; font-size: 1rem; outline: none; transition: border-color 0.2s; }
+        .login-box input:focus { border-color: var(--accent); }
+        .login-box button { width: 100%; padding: 14px; background: var(--primary); color: white; border: none; border-radius: 10px; font-weight: 600; cursor: pointer; font-size: 1rem; transition: background 0.2s; }
+        .login-box button:hover { background: var(--primary-dark); }
+        #loginEmpIdDisplay { background: #f1f5f9; border-radius: 8px; padding: 8px 14px; font-size: 0.85rem; color: #475569; margin-bottom: 10px; font-family: monospace; font-weight: bold; }
+
+        /* ── SECURE MODAL (password entry) ── */
+        #secureModal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 10000; justify-content: center; align-items: center; }
+        .modal-content { background: white; padding: 30px; border-radius: 12px; width: 90%; max-width: 400px; text-align: center; position: relative; color: var(--text); }
+        .modal-content input { width: 100%; padding: 12px; margin: 15px 0; border: 1px solid #ddd; border-radius: 8px; font-size: 1rem; outline: none; }
+        .modal-content input:focus { border-color: var(--accent); }
+        .it-note { font-size: 11px; color: #ef4444; margin-top: 15px; font-style: italic; border-top: 1px solid #f1f5f9; padding-top: 10px; }
+
+        /* ── CUSTOM ALERT / CONFIRM DIALOG ── */
+        #guDialog {
+            display: none; position: fixed; inset: 0; z-index: 999999;
+            background: rgba(10,15,40,0.72);
+            backdrop-filter: blur(3px);
+            justify-content: center; align-items: center;
+            font-family: 'Inter','Segoe UI',sans-serif;
+        }
+        #guDialog.show { display: flex; }
+        .gu-dialog-box {
+            background: #fff; border-radius: 18px; width: 90%; max-width: 420px;
+            box-shadow: 0 30px 80px rgba(0,0,0,0.45);
+            overflow: hidden; animation: guPop .22s cubic-bezier(.34,1.56,.64,1);
+        }
+        @keyframes guPop { from { transform: scale(0.88); opacity:0; } to { transform: scale(1); opacity:1; } }
+        .gu-dialog-header {
+            display: flex; align-items: center; gap: 12px;
+            padding: 20px 24px 16px;
+            border-bottom: 1px solid #f1f5f9;
+        }
+        .gu-dialog-icon {
+            width: 42px; height: 42px; border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 1.2rem; flex-shrink: 0;
+        }
+        .gu-dialog-icon.info    { background: #eff6ff; color: #1e3a8a; }
+        .gu-dialog-icon.success { background: #f0fdf4; color: #059669; }
+        .gu-dialog-icon.warning { background: #fff7ed; color: #d97706; }
+        .gu-dialog-icon.danger  { background: #fef2f2; color: #ef4444; }
+        .gu-dialog-icon.confirm { background: #f5f3ff; color: #7c3aed; }
+        .gu-dialog-title { font-size: 1rem; font-weight: 700; color: #0f172a; }
+        .gu-dialog-body { padding: 16px 24px 20px; font-size: 0.9rem; color: #374151; line-height: 1.65; white-space: pre-wrap; text-align: left; }
+        .gu-dialog-footer { display: flex; gap: 10px; padding: 0 24px 22px; justify-content: flex-end; }
+        .gu-btn {
+            padding: 10px 22px; border-radius: 9px; border: none;
+            font-size: 0.9rem; font-weight: 600; cursor: pointer; transition: .15s;
+            font-family: inherit;
+        }
+        .gu-btn-primary { background: var(--primary); color: #fff; }
+        .gu-btn-primary:hover { background: var(--primary-dark); }
+        .gu-btn-danger  { background: #ef4444; color: #fff; }
+        .gu-btn-danger:hover  { background: #dc2626; }
+        .gu-btn-outline { background: #f8fafc; color: #374151; border: 1px solid #e2e8f0; }
+        .gu-btn-outline:hover { background: #f1f5f9; }
+
+        /* ── DOWNLOAD TOAST ── */
+        #downloadToast {
+            position: fixed; bottom: 28px; left: 50%;
+            transform: translateX(-50%) translateY(90px);
+            background: #052e16; color: #bbf7d0;
+            padding: 13px 26px; border-radius: 50px;
+            font-size: 0.9rem; font-weight: 600; z-index: 999999;
+            display: flex; align-items: center; gap: 10px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+            transition: transform .38s cubic-bezier(.34,1.56,.64,1), opacity .3s;
+            opacity: 0; pointer-events: none; white-space: nowrap;
+        }
+        #downloadToast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+
+        /* ── MAIN APP ── */
+        #mainApp { display: none; height: 100vh; flex-direction: column; }
+        .header { height: 80px; background: var(--white); display: flex; align-items: center; justify-content: space-between; padding: 0 25px; border-bottom: 2px solid var(--border); z-index: 10; flex-shrink: 0; gap: 15px; }
+        .header-title { display: flex; flex-direction: column; min-width: 280px; }
+        .header-title b { font-size: 1rem; color: var(--primary); white-space: nowrap; }
+        .header-title span { font-size: 0.7rem; color: #64748b; font-weight: 600; text-transform: uppercase; }
+
+        .station-info-bar { display: flex; gap: 15px; background: #f1f5f9; padding: 8px 15px; border-radius: 8px; border: 1px solid var(--border); font-size: 0.75rem; color: #334155; flex-wrap: wrap; }
+        .station-info-bar b { color: var(--primary); }
+
+        .user-badge { background: #f0fdf4; color: #166534; padding: 6px 15px; border-radius: 8px; font-size: 0.85rem; font-weight: 600; border: 1px solid #bbf7d0; display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+
+        .content { display: flex; flex: 1; overflow: hidden; }
+        .sidebar { width: 400px; background: var(--white); border-right: 1px solid var(--border); display: flex; flex-direction: column; height: 100%; }
+        .sidebar-scroll-area { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 20px; }
+        .sidebar-footer { padding: 20px; background: #f8fafc; border-top: 1px solid var(--border); }
+
+        .card { background: #ffffff; border: 1px solid var(--border); border-radius: 12px; padding: 16px; width: 100%; }
+        .card h4 { margin: 0 0 12px; font-size: 0.75rem; color: #64748b; text-transform: uppercase; letter-spacing: 1px; border-bottom: 1px solid #f1f5f9; padding-bottom: 8px; }
+
+        .btn { width: 100%; padding: 12px 15px; border-radius: 8px; border: none; cursor: pointer; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 8px; transition: 0.2s; font-size: 0.9rem; }
+        .btn-primary { background: var(--primary); color: white; }
+        .btn-primary:hover { background: var(--primary-dark); }
+        .btn-outline { background: white; border: 1px solid #cbd5e1; color: var(--text); }
+        .btn-outline:hover { background: #f8fafc; }
+        .btn-success { background: var(--success); color: white; font-size: 1.05rem; padding: 16px; }
+        .btn-success:hover { background: #047857; }
+        .btn-danger-outline { background: #fff1f2; border: 1px solid #fecaca; color: var(--danger); font-size: 0.8rem; margin-top: 10px; }
+
+        #sigCanvas { width: 100%; height: 130px; background: #fff; border: 1px solid #cbd5e1; border-radius: 8px; touch-action: none; cursor: crosshair; }
+        #slots { display: grid; grid-template-columns: 1fr; gap: 12px; margin-top: 10px; }
+        .sig-item { border: 2px solid var(--success); background: #f0fdf4; border-radius: 8px; padding: 10px; position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 80px; }
+        .sig-item img { max-width: 100%; max-height: 80px; cursor: pointer; object-fit: contain; }
+        .lock-badge { font-size: 10px; color: #166534; font-weight: bold; margin-top: 5px; }
+
+        .preview-area { flex: 1; background: #64748b; display: flex; flex-direction: column; }
+        .pdf-toolbar { background: var(--primary-dark); color: white; padding: 12px; display: flex; justify-content: center; align-items: center; gap: 25px; }
+        .pdf-toolbar button { background: rgba(255,255,255,0.1); border: 1px solid white; color: white; padding: 5px 15px; border-radius: 4px; cursor: pointer; transition: background 0.2s; }
+        .pdf-toolbar button:hover { background: rgba(255,255,255,0.2); }
+        #viewer { flex: 1; overflow: auto; display: flex; justify-content: center; padding: 40px; position: relative; }
+        #pdfWrapper { position: relative; background: white; box-shadow: 0 20px 50px rgba(0,0,0,0.3); height: fit-content; }
+
+        #dragSigContainer { position: absolute; width: 180px; cursor: move; z-index: 100; display: none; padding: 8px; background: rgba(59,130,246,0.1); border: 2px dashed var(--accent); border-radius: 4px; }
+        #dragImg { width: 100%; pointer-events: none; }
+        .sig-meta-preview { font-size: 9px; line-height: 1.3; color: #1e3a8a; margin-top: 6px; font-weight: bold; border-top: 1px solid rgba(30,58,138,0.3); padding-top: 4px; pointer-events: none; }
+
+        .hidden { display: none !important; }
+        .or-divider { text-align: center; margin: 10px 0; color: #94a3b8; font-size: 0.7rem; font-weight: bold; }
+
+        /* ── SPINNER ── */
+        .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid rgba(255,255,255,0.3); border-top-color: white; border-radius: 50%; animation: spin 0.7s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body onload="initApp()" onmousemove="resetIdleTimer()" onkeydown="resetIdleTimer()" onclick="resetIdleTimer()">
+
+<!-- ══════════════════════════════════════════
+     STEP 1: BRANCH AUTHORIZATION OVERLAY
+     Shown on first open (workstation not activated)
+═══════════════════════════════════════════ -->
+<div id="authOverlay" style="display:none;">
+    <div class="auth-box">
+        <img src="data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wCEAAkGBxETEhUQExATEhESGBUTFRUYFhcWFRcfFhUWFxgbGhYYHSggGBslGxcVITIhJSkrLi46Fx8zODMtNygtLisBCgoKDg0OGxAQGy0lICYtLS0tMC0tLS0tLy0tLS0tLS8tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLf/AABEIAOEA4QMBEQACEQEDEQH/xAAbAAEAAgMBAQAAAAAAAAAAAAAABQYBAwQCB//EADUQAAIBAgQEAgoCAQUBAAAAAAABAgMRBAUhYRIxQVEywQYTInGBkbHR4fBSoSMzQmKi8cL/xAAbAQEAAwEBAQEAAAAAAAAAAAAAAwQFAgEGB//EAC8RAAICAgIBAwQBAwQDAQAAAAABAgMEERIxIQVBYRMiUbHhcYHBBjLR8BUjkRT/2gAMAwEAAhEDEQA/APuIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMN21PHJRW2CIxmYNu0HZd+rPjfUvXrJS4Y70l7+7L1WOtbkecLj5Jrid4vvzRD6d65fC1Rulyi3rz2j23HjrcSaPuSgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAYbtqeSkorb6BDY/G8Xsrw/X8HxHq/rDyG6qv9n5/P8F+ijj5l2cZgFk24ag5ysuXV9kXfTsKeVeox6T23+CO2ahEsJ+lGWAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADDfU8bSW2CGx+N4vZj4fr+D4j1j1d5DdVT+z3+f4L9FPH7n2cR8+WTbh6Dm7L4vsXcLCsy7OEP7v8EdligtsncPQUFZfln6DiYleNWq61/Jmzm5vbNWMxihvJ9Cr6l6pXhx8+ZPpf8nddTmzkp5q7+1FW25mLT/qWXP8A9sFr4J5YvjwyThNNXTumfVVWRsipwe0yo009M9Eh4AAAAAAAAAAAAAAAAAAAAAAAAAAAADDdtTxtJbYIbH43i9leH6/g+I9X9XeQ/pVP7ff5/gv008fL7OM+fLJsw9Bzdl8X0RcwcGzLs4Q/u/wR2WKC2ydw9BQVl8dz9CxMOvFrUK1/Jmzm5PbNONxagrc5PkvNlP1T1SGHDS8zfS/yySqpzfwQs5Nu7d2z4G22ds3Ob22aMYqK0jBGenTgsW4PvF815o1/S/VJYc+MvMH2vx8ogupU1tdk3CaaundM+9qtjZFTg9pme009M9Eh4AAAAAAAAAAAAAAAAAAAAAAAAADDdtTyUlFbYIbH43i9leH6/g+H9X9YeQ3VU/s/P5/gv0U8fL7OMwCybMPQc3ZfF9i7hYVmXZwh/d/gjssUFtk7h6CgrL/0/QcTDrxa1XBfyZs5ub2zTjcYoKy1k+S82U/VPVIYcNLzN9L/ACzuqpzfwQs5Nu7d2z4G22ds3Ob22aUYqK0jBwvPg9NlWhKNm1a5byMG/HjGVkdJ/wDfJHGyMnpM1lMkOnBYtwfeL5r7Gv6X6pLDnxl5g+/j5RBdSpra7JuE01dO6Z97VbGyKnB7TM9pp6Z6JDwAAAAAAAAAAAAAAAAAAAAAAAA4s2k1DTq0mYn+oJzjhvj7tJ/0J8dJz8kMfBGiEex05LfR4yfwdOKiuHVPr3P0n0+iiqhfQ8p+/wCTLslJy+42Vp2i32TZYyLfpVSn+E2cxW3ors5Nu7d2z8xtunbNzm9tmtGKitIwRnpK5fgbe3Ln0Xb8n2fo3o/0krrl93svx/JRvv5fbHo7a8IuLUuXU3siquytxt/2+5Wi2ntFeqJJuzuujPzO+NcbJRre478M1YNteTBEdEpk0naS6Jr+z7L/AEzKTqnF9J+P/nko5SXJMkj6YqgAAAAAAAAAAAAAAAAAAAAGJSSV27JatnjaXYIip6S4dO15NfyUdPuU3n1J62R/ViSMJwqwumpQl1/eTJpwryKnF+YskjL3RD4vCuD7xfJnwXqXpk8Of5i+n/hmlVapr5NBmEx04PFuD7xfNeaNb0v1SeHLi/MH2vx8ohupU1v3JqLUlpqmj7yMq769xe4tGc04sia2WzT9nVdNdT4zJ/09kQm/o6cfbzovQyY6+46cDl/D7UtX0XRGt6V6IqH9W/Tl7L2X8kN1/LxHo727H0EpKK2ysQ2PxnH7K8P1/B8R6v6u8huqp/Z+/wCC/TTx+59nGYJZNmHoObsvi+xcwcGzLs4Q693+COyxQW2TlOEacedorVt/22z9BxsarFqUIeEv+7M2c3J7ZGP0lw97Xlb+XDp9/wCjj/8AfTvRD9WJLUasZJSi04vVNci3GSktokPZ0AAAAAAAAAAAAAAAAAYlJJXeiWrPG9Ap2f506r9XB2prm/5fgxcvLdn2x6/ZXnZvwiEKBESGT5pKhLvB+KPmtyzjZLpl8HcJuJdac4VYJpqUJfvwZszhXk18ZeYstRlrzEiMXhXB94vkz4P1P02eHP8AMX0/8M0qrVNfJoMvZMdODxbg+8XzXmjX9L9Ulhy4vzB9r8fKILqVNeOybpzTV07pn3tVsbYKcHtMz2mnpmW7ancpKK2+jwhsfjeL2V4fr+D4f1f1h5D+lU/s/P5/gv0U8ful2cZgFk2Yag5uy+L7F3BwbMuzhDr3f4RHZYoLbJunTjTjzSS1bf1Z+gYuLViVcIdLt/n+pmzm5PbKhnucus+CN1SXzlu9tjOyst2vjHoqTnyIgokZKZLm0qMrO7pvmu263LmLkup6fRJCfEu1GrGcVKLTi9UzcjJSW0WU9ns6AAAAAAAAAAAAAAMSkkrt2S6njeuwU7Ps6dV+rg7U1zf8vwYuXl/U+2PX7K8578IhCgRGUnztoub6a8j3XjYMHgJDJ80lQl3g/FHzW5Zxsl0y+DuE+JdadSFWF01KEl++5mzOFWTVxl5iy1GWvKIjF4VwfeL5M+C9S9Mnhz/MX0/8M0qrVNfJoMwmOnBYtwfeL5rzRr+l+qSw58X5g+1+PlEF1Kmtrs94/G8fsx8P1/BY9X9XeS/pVeIfv+Dmmjj5fZxmAWTbhqDm7L4vsXMHBsy7OEP7v8EdligtsmqcI0480ktW39WfoOLjVYlXCHhLt/8AJmzm5PbKhnucus+CN1SXzlu9tjNy8p2vjHoqTnyIgpEZnhdr205X6HuvGwYPASeS5tKjKzu6b5rtui5i5Tqen0SQnxLvRqxnFSi04vVM3IyUltFk9nQAAAAAAAAAAAAKz6X4yS4aKdotcUt9bJe7RmX6ja1qCIbX7FYMkgOnAYR1Zqmmk31fRLn7/cS01OyaijqMdvRd8NllKFP1XCnF+K/OW7N6GPCMOGvBZUUloqWdZTKjK6u6b5Pts9/qY+Tiul7XRXnDiRhUOCQyfNJUJd4PxR81uWcbJdL+DuE3EutOcKsLpqUJfvwZszhVk1OMvMWWoy15REYvCuD7xfJnwfqXpk8Of5i+n/hmlVapr5NBlkwPQbMPQc3ZfF9i5g4NuXZwh17v8Edligtsm6cI049Elq2/q2foGLjVYlXCHhLv5+TNnNye2VDPc5dZ8EbqkvnLd7bGdl5TtfGPX7Kk58vBEFEjO3K8unWlwx0ivFLovzsWKMeV0tLo6jFyZdIZZSVL1PD7HXu9799zcVEFDhrwWeK1op2b5XKhK3OD8MvJ7mJk40qZfBXlDiR5WOCUyXN5UZWd3TfNdt1+6lvFyXU9PokhPiXajVjOKlFpxeqaN2MlJbRYT2ezo9AAAAAAAAAABD+kOVOtFSj/AKkL2X8l295SzMb6q3HtEdkOXRS5RadmrNaNdTDaaemVjMJNNNNprVNc0E2ntAuWQ50qq4J2VVfKW632NvEy1auMu/2WYT5EtWpRnFxkk4vRplyUVJaZ21spGdZTKjK6u6b5S7bPf6mFk4rqe10V5w4kYVCMkMnzSVCXeD8UfNblnGyXS/g7hPiXWnOFWF01KEv34M2ZwqyauMvMWWoy15RE4vCSg+8ej+58J6j6XbiT8LcfZ/8AJpVXKa+Txh8PKbslp1fREOF6fdlT4xWl7v2R1ZbGCJqnCNOPNJLVt/Vn32Li1YlXCHhLt/5Zmzm5PbKhnucus+CN1SXzlu9tjOyst2vjHr9lSc9+ERBRIztyvLp1pcMdIrxS6L87FijHldLS6Ooxci8YTCwpQUIq0V/fdtm9XXGuOkWkkkZpYunJ2jUhJ9lJN/0exshJ6TCaZ6xOHjUi4SV4v9+Z7OEZx4yDW1plHzfK5UJW5wfhl5PcwMnGdL+CtOHFkeVjglMlzeVGVnd03zXbdfupbxcp1PT6JIT4l2o1YzipRacXqmjdjJSW0WU9ns6AAAAAABVfSHOqim6VOTio6Nrm37+iRk5mXJT4Q8aILLHvSOHLs9q05e1KVSHVN3fwb6lenNsg/ue0cxsa7LnhsRGpFTi7xf78zbhOM48olhPfRE5/kqqr1kFaoua6S/O5Uy8RWfdHv9kc4b8op0otOzVmtGjEaaemVzMJNNNNprVNc0E2ntAueQZx65cEtKkV8JLujcxMr6q4vtFmE+XglK9GM4uMknF6NMtyipLTJGtlJzrKZUJXV3Tfhl22e/1MLKxXU9roqzhxIwqHBI5LmcqM+d6cmuJea3LWLkOqWvZncJOLL2b/AGWgkEkugU70kzSU5uknanB2f/JrnfZPoY2bkOcnBdIr2T29EIZ5EduV5dOtLhjpFeKXRfnYnx6JXS0uvc6jFyZecFhIUoKEFZL5vd92b9dca48YlqMUlpFe9MMVK8aSdotcT31aV/kZ3qNkk1BdEVr9itxk07p2a1TXNGWm09ogLjkGdKqvVzdqi5PpL87G3iZasXGXf7LMJ78MlsTh41IuEleL/fgy3OCnHjI7aTWmUfN8rlQlbnB+GXk9zByceVMvgrShxI8rHBLZBmkqU1Bu9ObSa7X0ui5iZDrlxfTJK5aei7m8WQAAAAACmek2AlCo6lrwqO9+z6pmHnUuM3P2ZWsjp7IUokZIZRmkqEr84PxR81uWcfIlTL49zuM+JeMNiI1IqcXeL6m9CcZx5RLKe/KInP8AJVVTqQVqi5r+X53KeXiKxco9/s4nDflFOlFp2as1o0YrWnplYl/RWjJ11JcoJuXxTSXz+hdwIt27XsSVJ8i6Skkrt2S1bNtvXllkpufZ06r9XDSkuv8AK3kYmXl/V+2PX7K8578IhSiRHZlmAlWmopaaOT6JfcnoplbPS/udRXJn0BI+jLZkAo/pDgJU6spW9io3JPd6te/mYOZS4TcvZlayOnsiimRknkubSoSs9acvEu263LeLkup6fR3CfEu1CtGcVOLvF6pm7GSktosp7Iz0gyn10VKP+pG9uzXYq5eN9WO12jiyHIpc4tNpqzWjT5owmmnplYxGTTunZrVPqgm15QLjkGdKqvVzdqi5P+X52NvEy1Z9su/2WYT34ZLYnDxqRcJK8XzLk4Ka4yO2k1plIzbKZ0ZcnKn0lb+n2Zg5GLOp+PKK0oOIybLZ1Zx9lqCacpdNOi7tjGx5WTXjwIQbZfD6AtAAAAAAHitSjOLjJJxejTOZRUlpnjWyk51lEqMrrWm+T7bPcwsrFdT2uitOHH+hFlQ4JDKM0lQlfnB+KPmtyzjZDpfwdRm4svGGxEakVOLvF9f3qb0JxnHlEtJ78nPi8qo1HxTppy7ptN++z1I7Maux7kjxwT7N1ChTpRtGKhFavp8WzuMIVrwtI9SSRU8+zp1X6uDtSXN/y/GxkZeW7Hxj1+yvOe/CIUoEZ15bgJ1p8EeX+6XSK/ehPTRK2Wkexi5PSLvhMNToU7K0YrWUn17ts3a64Uw0i0koorGb5/OcuGnJwprqtJS3v0WxlZObKb1B6RDOxvo05bnlWnJcUpVIdU3d/BvqcUZk65fc9o8jY12W/wDx16fSdOa/fc0bP2XQ/KZY8SRS84yuVCXeD8MvJ7mJk4zpfwVpwcSPKpwSeS5tKjKz1pvxLtut/qW8bKdT0+juE+JdqFaM4qUWnF6po3YyUltFlPZFZ9kqqrjhZVV/22e+5Uy8RWrlHs4shy8lNnFptNWa0afNGG009MrmIyad07NaphPT2jwuXo9nHrVwT/1Iq9/5Lv7zbxMr6q4y7LNc+Xgmi8SAAAAAAAAAAA8VqUZxcZJOL0aZzKKktMNbKTnWUSoyurum+T7bPcwsrFdT2uirOHEiyocEhlGaSoSvzg/FHzW5ZxsiVMvg6jPiXehioTh6yMlwWvft3v2N6NkZR5J+C0mmtlSz7OnVfq4O1Jc3/L8GPl5bs+2PX7ILJ78IhSgRHXluAnWnwR5f7pdEv3oTU0StlxR7GLk9Iu+Ew1OhTsrRjHWUn17ts3q64Uw0i0kooqme5y6z4I3VJfOW722MjKyna+K6/ZBOe/BEFIjABIZPmkqEu8H4o+a3LONkul/B3CbiXP8Ax16fSdOa/fc0bn2XQ/KZY8SRTM4yuVCXeD8MvJ7mHk4zpl8FecHEjyscEnkubSoSs7um/FHtut/qW8XKdL0+juE+JdI4mDh6xSXBa/F0sbisi48t+Czta2UnPMdGtU4oxslpfrLdmDlXRtnuK/krWNNkcVjgmvRShJ1uNL2YJ3fvVkvP4F/0+DdvL2RJUvu2XM2yyAAAAAAAAAAAAeK1KM4uMknF6NM5lFSWmNbKTnWUSoyurum+T7bMwsrFdT2uirOHHoiyocG2Neai4KTUJWbj0djtTkouKfhnu30ajg8OvLsBOtPgjy/3S6RX70JqaZWy0j2MXJ6Rd8JhadCnZWUY6yk+vdtm9XXCmGl0WklFFUz3OXWfBG6pL5y3e2xk5WU7Xxj1+yCc+XREFIjO3K8unWnwx0ivFLovzsTUUSulpdHUYuTN2c5TKhK6vKm+Uu2z3JMnFdL2uj2cOJGFQ4JDJ80lQl3g/FHzW5ZxsmVL+DuE+Jc/8den0nCa/fc0bn2XQ/KZY8SRTM4yuVCXeD8MvJ7mHk4zpl8FecOJHlY4Nqrz4fV8T4G7uN9LnfOXHjvwe7fRqODw7cqy2daXCtIrxS6L7vYsUY8rpaXXudRi5MvODwsKUVCCsl83u9zerrjXHjEtJJLSN5IegAAAAAAAAAAAAA8VqUZxcZJOL0aZzKKktM8a2UnOsolRldXdN8n22ZhZWK6ntdFacOP9CLKhwdeW4CdafBHl/ul0iv3oTU0ytlpHUY8vCLvhMLToU7K0YrWUn17ts3q64Uw0iykooqme5y6z4I3VJfOW722MnKy3a9R6IJz5EQUSM7cry6dafDHSK8Uui+72LGPRK6Wl0dRjyZecHhIUoqEFZL5vd92b1dca48YlpJJaR7r0Yzi4yScXo0zqUVJafQa2UnOsplQldXdN+GXbZ7/UwsrGdT2uitOHEjCocEhk+aSoS7wfij5rcs42TKl/B3GfEuf+OvT6ThNfvuaNz7LoflMs+JIpmcZXKhLvB+GXk9zDycZ0v4K04OJHlY4O3KstnWlwrSK8Uui+72LGPRK6Wl17nUYuTLzg8LClFQgrJfN7vuzerrjXHjEtJJLSN5IegAAAAAAAAAAAAAAAA8VqUZxcZJOL0aZzKKktM8a2QFT0Uhe6qyUe1k38/wAGe/TYb8N6IvoomMLhadCFo+zFatvr3bZdrrhTHS6JElFFTz3OXWfBG6pL5y3e2xkZWW7Xxj0QTny/oRBRIztyvLp1p8MdIrxS6L7vYsY9ErpaXR1GLky84LCQpQUIKyXze77s3q641x4xLSSS0jlzjNoUF/Kb5R832RFkZMaV57OZzUSFo+lU+L26cXH/AI3T/t6lGPqUt/cvBGrn7osnsVafJShNfNM1Ptsj+Uybw0UzOsplQldXdN+GXbZ7/Uw8nFdL2uitOHEjCocEhk+aSoS7wfij5rcs42S6X8HcJ8S6f469PpOnNfvuaNz7LoflMs+JIhn6KQv/AKsuHtZX+f4KX/jYb/3Mi+ivyTeDwsKcVCCsl/e7fVl+uuNceMSVJJaRvOz0AAAAAAAAAAAAAAAAAAAAAhvStv1Dty4o8Xu/9sUs/f0fBHb/ALSlmEVjMbX1vbrbmerXuD6BlMKSpR9V4O/V977n0dCgoL6fRbjrXg05zm0aEe9R+GPm9jjJyY0x+Tyc+KKRXrSnJzk7yerZgzm5vlLsrN7NZweF+yKjKFCEZaOzdu1235n0WLFxqSZagtRSOnFxg4SU7cFnxX5WJbFFxfLo6eteT57iFDilwNuF3wt87Hzc+Kk+PRUffg1HB4Wv0Nb4Kn8eJW99tf8A5Nj03fCX9SenpliNImAAAAAAAAAAAAAAAAAAAAAAAAPFalGUXGSvFqzRzKKktMNbKTnWUSoyurum+T7bPcw8rFdT2uirODiRZTODuyzNKlBvh1T5xfK/R+8sUZM6X46Ooycejlr1pTk5yd5PVsinOU3yl2eN78s1nB4Wn0fyO1qtVe1zjF9N3vt+rXw8PX3z79kTwr92WKpUUU5NpJatvkjSlJRW2TFLzzOHWfDHSkuXeW7+xh5WU7XpdFadm/CIgpEZ25Vls60uFaRXil0X3exYooldLS6O4xcmXnB4WNOChBWS/vd7m/XXGuPGJZSSWkbzs9AAAAAAAAAAAAAAAAAAAAAAAAAB4rUozi4yScXo0zmUVJaYa2UnOsolRldXdN8n22Zh5WK6ntdFWcOJFlM4ABafR7I7WrVVrzjF9N3vt0NfEw9ffP8AsieuHuyxVJqKcm0ktW3yRpSkorbJil55nDrPhjdUl06y3f2MPKyna9R6K0578IiCkRnbleWzrS4VpFeKXRfd7FjHoldLS69zqMXJl5weFhSioQVkvm93ub1dca48YlpJJaRvJD0AAAAAAAAAAAAAAAAAAAAAAAAAAAAHitSjOLjJJxejTOZRUlpgqWO9Gqqk/V2nB8rtKS99+ZkW+nzT+zyiu6n7Hfkno/wP1lWzkvDHmlu+7LGLhcHyn2dwr15ZP1KiinJtJLVt8kaDaitslKXnmcOs+GN1SX/bd/Yw8rKdr1HorTnyIgpEZ25Vls60uFaRXil0X3exYx8eV0tLr3O4xcmXnB4WFKKhBWS+b3fdm9XXGuPGJZSSWkbyQ9AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABTfSXM5Tm6SdoQdmv5Nc7+5mJm5DlJwXSK9k/OiEKBEduVZbOtLhWkV4pdF93sT0USulpde53GLky84PCwpRUIKyXze77s36641x4xLKSS0jeSHoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABTfSHKpxqSqRi5Qm+K6V7N87/AB6mJmY0lNyS2mV5we9nJluU1KskuFxh1k1p8O7IaMWdr60jmMGy7YPCwpRUIKyXze77s3a641x4xLKSS0jeSHoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP/9k=" style="width:72px;height:72px;object-fit:contain;margin-bottom:16px;filter:drop-shadow(0 4px 12px rgba(59,130,246,0.4));">
+        <h2 style="margin:0 0 5px 0;">Branch Authorization</h2>
+        <p style="color:#94a3b8; font-size:0.85rem; margin:0 0 15px 0;">Godavari Urban Multi-State Credit Co-Op Society</p>
+        <span id="ipLabel">Detecting Network IP...</span>
+
+        <!-- Step 1: Enter Emp ID -->
+        <div id="authStep1">
+            <p style="color:#94a3b8; font-size:0.9rem; margin-bottom:20px;">Enter your Employee ID to start branch activation</p>
+            <input type="text" id="empIdAuth" placeholder="Enter Employee ID  (e.g. GU-0570)" autocomplete="off">
+            <button class="btn btn-primary" style="margin-top:10px;" onclick="verifyIdentity()">
+                <i class="fas fa-user-check"></i> Verify Employee ID
+            </button>
+            <div id="authLoader" class="loader-text">
+                <i class="fas fa-spinner fa-spin"></i> Communicating with server...
+            </div>
+            <div id="authError" style="color:#f87171; font-size:0.85rem; margin-top:10px; display:none; white-space:pre-line; line-height:1.5;"></div>
+        </div>
+
+        <!-- Step 2: Wait for IT authorization -->
+        <div id="authStep2" class="hidden">
+            <div id="reqIdBox">
+                <small style="color:#64748b; font-weight:bold;">PENDING TO IT DEPARTMENT FOR AUTHORIZATION</small>
+                <div id="displayReqId" style="color:var(--success); font-family:monospace; font-size:1.4rem; font-weight:bold; margin-top:5px;"></div>
+            </div>
+            <p id="authPendingMsg" style="color:#94a3b8; font-size:0.85rem; line-height:1.6;">Your IP and Employee ID are verified. IT Department must authorize this workstation before you can proceed.</p>
+            <button id="checkAuthBtn" class="btn btn-success" style="margin-top:10px;" onclick="checkITAuthorization()">
+                <i class="fas fa-shield-alt"></i> Check IT Authorization
+            </button>
+            <div id="activateError" style="color:#f87171; font-size:0.85rem; margin-top:10px; display:none;"></div>
+            <button class="btn btn-outline" style="margin-top:10px; color:#94a3b8; background:transparent; border-color:#334155; font-size:0.8rem;" onclick="resetAuthFlow()">
+                ← Start over
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- ══════════════════════════════════════════
+     STEP 2: LOGIN OVERLAY
+     Shown after workstation is activated
+═══════════════════════════════════════════ -->
+<div id="loginOverlay">
+    <div class="login-box">
+        <img src="data:image/jpeg;base64,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" style="width:72px;height:72px;object-fit:contain;margin-bottom:12px;filter:drop-shadow(0 4px 12px rgba(30,58,138,0.25));">
+        <h2>Godavari Urban</h2>
+        <p>Multi-State Credit Co-Op Society Ltd. Nanded</p>
+        <div style="font-weight:bold; margin-bottom:15px; color:var(--primary-dark); font-size:0.9rem;">
+            <i class="fas fa-file-signature"></i> Internal Branch Document Authorization Tool
+        </div>
+        <div id="loginEmpIdDisplay"></div>
+        <input type="password" id="passInput" placeholder="Enter Security Pin / Password" onkeydown="if(event.key==='Enter') handleLogin()">
+        <button onclick="handleLogin()" id="loginBtn">
+            <i class="fas fa-sign-in-alt"></i> Authorized Access Only
+        </button>
+        <div id="loginError" style="color:var(--danger); display:none; margin-top:15px; font-weight:bold; font-size:0.9rem;">
+            <i class="fas fa-exclamation-triangle"></i> Authentication Failed!
+        </div>
+        <div id="loginLoader" class="loader-text" style="color:#64748b;">
+            <i class="fas fa-spinner fa-spin"></i> Verifying...
+        </div>
+    </div>
+</div>
+
+<!-- ══════════════════════════════════════════
+     SECURE MODAL (Password prompts)
+═══════════════════════════════════════════ -->
+<div id="secureModal">
+    <div class="modal-content">
+        <h3 id="modalTitle" style="margin:0;">Security Action</h3>
+        <p id="modalDesc" style="font-size:0.85rem; color:#64748b;"></p>
+        <input type="password" id="modalInput" placeholder="Enter password here...">
+        <div style="display:flex; gap:10px;">
+            <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+            <button class="btn btn-primary" id="modalConfirmBtn">Confirm</button>
+        </div>
+        <div class="it-note">
+            <i class="fas fa-info-circle"></i> Contact IT Admin Department for password resets.
+        </div>
+    </div>
+</div>
+
+<!-- ══════════════════════════════════════════
+     MAIN APP
+═══════════════════════════════════════════ -->
+<div id="mainApp">
+    <!-- Header -->
+    <div class="header">
+        <div class="header-title" style="display:flex;flex-direction:row;align-items:center;gap:12px;min-width:320px;">
+            <img src="data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wCEAAkGBxETEhUQExATEhESGBUTFRUYFhcWFRcfFhUWFxgbGhYYHSggGBslGxcVITIhJSkrLi46Fx8zODMtNygtLisBCgoKDg0OGxAQGy0lICYtLS0tMC0tLS0tLy0tLS0tLS8tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLf/AABEIAOEA4QMBEQACEQEDEQH/xAAbAAEAAgMBAQAAAAAAAAAAAAAABQYBAwQCB//EADUQAAIBAgQEAgoCAQUBAAAAAAABAgMRBAUhYRIxQVEywQYTInGBkbHR4fBSoSMzQmKi8cL/xAAbAQEAAwEBAQEAAAAAAAAAAAAAAwQFAgEGB//EAC8RAAICAgIBAwQBAwQDAQAAAAABAgMEERIxIQVBYRMiUbHhcYHBBjLR8BUjkRT/2gAMAwEAAhEDEQA/APuIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMN21PHJRW2CIxmYNu0HZd+rPjfUvXrJS4Y70l7+7L1WOtbkecLj5Jrid4vvzRD6d65fC1Rulyi3rz2j23HjrcSaPuSgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAYbtqeSkorb6BDY/G8Xsrw/X8HxHq/rDyG6qv9n5/P8F+ijj5l2cZgFk24ag5ysuXV9kXfTsKeVeox6T23+CO2ahEsJ+lGWAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADDfU8bSW2CGx+N4vZj4fr+D4j1j1d5DdVT+z3+f4L9FPH7n2cR8+WTbh6Dm7L4vsXcLCsy7OEP7v8EdligtsncPQUFZfln6DiYleNWq61/Jmzm5vbNWMxihvJ9Cr6l6pXhx8+ZPpf8nddTmzkp5q7+1FW25mLT/qWXP8A9sFr4J5YvjwyThNNXTumfVVWRsipwe0yo009M9Eh4AAAAAAAAAAAAAAAAAAAAAAAAAAAADDdtTxtJbYIbH43i9leH6/g+I9X9XeQ/pVP7ff5/gv008fL7OM+fLJsw9Bzdl8X0RcwcGzLs4Q/u/wR2WKC2ydw9BQVl8dz9CxMOvFrUK1/Jmzm5PbNONxagrc5PkvNlP1T1SGHDS8zfS/yySqpzfwQs5Nu7d2z4G22ds3Ob22aMYqK0jBGenTgsW4PvF815o1/S/VJYc+MvMH2vx8ogupU1tdk3CaaundM+9qtjZFTg9pme009M9Eh4AAAAAAAAAAAAAAAAAAAAAAAAADDdtTyUlFbYIbH43i9leH6/g+H9X9YeQ3VU/s/P5/gv0U8fL7OMwCybMPQc3ZfF9i7hYVmXZwh/d/gjssUFtk7h6CgrL/0/QcTDrxa1XBfyZs5ub2zTjcYoKy1k+S82U/VPVIYcNLzN9L/ACzuqpzfwQs5Nu7d2z4G22ds3Ob22aUYqK0jBwvPg9NlWhKNm1a5byMG/HjGVkdJ/wDfJHGyMnpM1lMkOnBYtwfeL5r7Gv6X6pLDnxl5g+/j5RBdSpra7JuE01dO6Z97VbGyKnB7TM9pp6Z6JDwAAAAAAAAAAAAAAAAAAAAAAAA4s2k1DTq0mYn+oJzjhvj7tJ/0J8dJz8kMfBGiEex05LfR4yfwdOKiuHVPr3P0n0+iiqhfQ8p+/wCTLslJy+42Vp2i32TZYyLfpVSn+E2cxW3ors5Nu7d2z8xtunbNzm9tmtGKitIwRnpK5fgbe3Ln0Xb8n2fo3o/0krrl93svx/JRvv5fbHo7a8IuLUuXU3siquytxt/2+5Wi2ntFeqJJuzuujPzO+NcbJRre478M1YNteTBEdEpk0naS6Jr+z7L/AEzKTqnF9J+P/nko5SXJMkj6YqgAAAAAAAAAAAAAAAAAAAAGJSSV27JatnjaXYIip6S4dO15NfyUdPuU3n1J62R/ViSMJwqwumpQl1/eTJpwryKnF+YskjL3RD4vCuD7xfJnwXqXpk8Of5i+n/hmlVapr5NBmEx04PFuD7xfNeaNb0v1SeHLi/MH2vx8ohupU1v3JqLUlpqmj7yMq769xe4tGc04sia2WzT9nVdNdT4zJ/09kQm/o6cfbzovQyY6+46cDl/D7UtX0XRGt6V6IqH9W/Tl7L2X8kN1/LxHo727H0EpKK2ysQ2PxnH7K8P1/B8R6v6u8huqp/Z+/wCC/TTx+59nGYJZNmHoObsvi+xcwcGzLs4Q693+COyxQW2TlOEacedorVt/22z9BxsarFqUIeEv+7M2c3J7ZGP0lw97Xlb+XDp9/wCjj/8AfTvRD9WJLUasZJSi04vVNci3GSktokPZ0AAAAAAAAAAAAAAAAAYlJJXeiWrPG9Ap2f506r9XB2prm/5fgxcvLdn2x6/ZXnZvwiEKBESGT5pKhLvB+KPmtyzjZLpl8HcJuJdac4VYJpqUJfvwZszhXk18ZeYstRlrzEiMXhXB94vkz4P1P02eHP8AMX0/8M0qrVNfJoMvZMdODxbg+8XzXmjX9L9Ulhy4vzB9r8fKILqVNeOybpzTV07pn3tVsbYKcHtMz2mnpmW7ancpKK2+jwhsfjeL2V4fr+D4f1f1h5D+lU/s/P5/gv0U8ful2cZgFk2Yag5uy+L7F3BwbMuzhDr3f4RHZYoLbJunTjTjzSS1bf1Z+gYuLViVcIdLt/n+pmzm5PbKhnucus+CN1SXzlu9tjOyst2vjHoqTnyIgokZKZLm0qMrO7pvmu263LmLkup6fRJCfEu1GrGcVKLTi9UzcjJSW0WU9ns6AAAAAAAAAAAAAAMSkkrt2S6njeuwU7Ps6dV+rg7U1zf8vwYuXl/U+2PX7K8578IhCgRGUnztoub6a8j3XjYMHgJDJ80lQl3g/FHzW5Zxsl0y+DuE+JdadSFWF01KEl++5mzOFWTVxl5iy1GWvKIjF4VwfeL5M+C9S9Mnhz/MX0/8M0qrVNfJoMwmOnBYtwfeL5rzRr+l+qSw58X5g+1+PlEF1Kmtrs94/G8fsx8P1/BY9X9XeS/pVeIfv+Dmmjj5fZxmAWTbhqDm7L4vsXMHBsy7OEP7v8EdligtsmqcI0480ktW39WfoOLjVYlXCHhLt/8AJmzm5PbKhnucus+CN1SXzlu9tjNy8p2vjHoqTnyIgpEZnhdr205X6HuvGwYPASeS5tKjKzu6b5rtui5i5Tqen0SQnxLvRqxnFSi04vVM3IyUltFk9nQAAAAAAAAAAAAKz6X4yS4aKdotcUt9bJe7RmX6ja1qCIbX7FYMkgOnAYR1Zqmmk31fRLn7/cS01OyaijqMdvRd8NllKFP1XCnF+K/OW7N6GPCMOGvBZUUloqWdZTKjK6u6b5Pts9/qY+Tiul7XRXnDiRhUOCQyfNJUJd4PxR81uWcbJdL+DuE3EutOcKsLpqUJfvwZszhVk1OMvMWWoy15REYvCuD7xfJnwfqXpk8Of5i+n/hmlVapr5NBlkwPQbMPQc3ZfF9i5g4NuXZwh17v8Edligtsm6cI049Elq2/q2foGLjVYlXCHhLv5+TNnNye2VDPc5dZ8EbqkvnLd7bGdl5TtfGPX7Kk58vBEFEjO3K8unWlwx0ivFLovzsWKMeV0tLo6jFyZdIZZSVL1PD7HXu9799zcVEFDhrwWeK1op2b5XKhK3OD8MvJ7mJk40qZfBXlDiR5WOCUyXN5UZWd3TfNdt1+6lvFyXU9PokhPiXajVjOKlFpxeqaN2MlJbRYT2ezo9AAAAAAAAAABD+kOVOtFSj/AKkL2X8l295SzMb6q3HtEdkOXRS5RadmrNaNdTDaaemVjMJNNNNprVNc0E2ntAuWQ50qq4J2VVfKW632NvEy1auMu/2WYT5EtWpRnFxkk4vRplyUVJaZ21spGdZTKjK6u6b5S7bPf6mFk4rqe10V5w4kYVCMkMnzSVCXeD8UfNblnGyXS/g7hPiXWnOFWF01KEv34M2ZwqyauMvMWWoy15RE4vCSg+8ej+58J6j6XbiT8LcfZ/8AJpVXKa+Txh8PKbslp1fREOF6fdlT4xWl7v2R1ZbGCJqnCNOPNJLVt/Vn32Li1YlXCHhLt/5Zmzm5PbKhnucus+CN1SXzlu9tjOyst2vjHr9lSc9+ERBRIztyvLp1pcMdIrxS6L87FijHldLS6Ooxci8YTCwpQUIq0V/fdtm9XXGuOkWkkkZpYunJ2jUhJ9lJN/0exshJ6TCaZ6xOHjUi4SV4v9+Z7OEZx4yDW1plHzfK5UJW5wfhl5PcwMnGdL+CtOHFkeVjglMlzeVGVnd03zXbdfupbxcp1PT6JIT4l2o1YzipRacXqmjdjJSW0WU9ns6AAAAAABVfSHOqim6VOTio6Nrm37+iRk5mXJT4Q8aILLHvSOHLs9q05e1KVSHVN3fwb6lenNsg/ue0cxsa7LnhsRGpFTi7xf78zbhOM48olhPfRE5/kqqr1kFaoua6S/O5Uy8RWfdHv9kc4b8op0otOzVmtGjEaaemVzMJNNNNprVNc0E2ntAueQZx65cEtKkV8JLujcxMr6q4vtFmE+XglK9GM4uMknF6NMtyipLTJGtlJzrKZUJXV3Tfhl22e/1MLKxXU9roqzhxIwqHBI5LmcqM+d6cmuJea3LWLkOqWvZncJOLL2b/AGWgkEkugU70kzSU5uknanB2f/JrnfZPoY2bkOcnBdIr2T29EIZ5EduV5dOtLhjpFeKXRfnYnx6JXS0uvc6jFyZecFhIUoKEFZL5vd92b9dca48YlqMUlpFe9MMVK8aSdotcT31aV/kZ3qNkk1BdEVr9itxk07p2a1TXNGWm09ogLjkGdKqvVzdqi5PpL87G3iZasXGXf7LMJ78MlsTh41IuEleL/fgy3OCnHjI7aTWmUfN8rlQlbnB+GXk9zByceVMvgrShxI8rHBLZBmkqU1Bu9ObSa7X0ui5iZDrlxfTJK5aei7m8WQAAAAACmek2AlCo6lrwqO9+z6pmHnUuM3P2ZWsjp7IUokZIZRmkqEr84PxR81uWcfIlTL49zuM+JeMNiI1IqcXeL6m9CcZx5RLKe/KInP8AJVVTqQVqi5r+X53KeXiKxco9/s4nDflFOlFp2as1o0YrWnplYl/RWjJ11JcoJuXxTSXz+hdwIt27XsSVJ8i6Skkrt2S1bNtvXllkpufZ06r9XDSkuv8AK3kYmXl/V+2PX7K8578IhSiRHZlmAlWmopaaOT6JfcnoplbPS/udRXJn0BI+jLZkAo/pDgJU6spW9io3JPd6te/mYOZS4TcvZlayOnsiimRknkubSoSs9acvEu263LeLkup6fR3CfEu1CtGcVOLvF6pm7GSktosp7Iz0gyn10VKP+pG9uzXYq5eN9WO12jiyHIpc4tNpqzWjT5owmmnplYxGTTunZrVPqgm15QLjkGdKqvVzdqi5P+X52NvEy1Z9su/2WYT34ZLYnDxqRcJK8XzLk4Ka4yO2k1plIzbKZ0ZcnKn0lb+n2Zg5GLOp+PKK0oOIybLZ1Zx9lqCacpdNOi7tjGx5WTXjwIQbZfD6AtAAAAAAHitSjOLjJJxejTOZRUlpnjWyk51lEqMrrWm+T7bPcwsrFdT2uitOHH+hFlQ4JDKM0lQlfnB+KPmtyzjZDpfwdRm4svGGxEakVOLvF9f3qb0JxnHlEtJ78nPi8qo1HxTppy7ptN++z1I7Maux7kjxwT7N1ChTpRtGKhFavp8WzuMIVrwtI9SSRU8+zp1X6uDtSXN/y/GxkZeW7Hxj1+yvOe/CIUoEZ15bgJ1p8EeX+6XSK/ehPTRK2Wkexi5PSLvhMNToU7K0YrWUn17ts3a64Uw0i0koorGb5/OcuGnJwprqtJS3v0WxlZObKb1B6RDOxvo05bnlWnJcUpVIdU3d/BvqcUZk65fc9o8jY12W/wDx16fSdOa/fc0bP2XQ/KZY8SRS84yuVCXeD8MvJ7mJk4zpfwVpwcSPKpwSeS5tKjKz1pvxLtut/qW8bKdT0+juE+JdqFaM4qUWnF6po3YyUltFlPZFZ9kqqrjhZVV/22e+5Uy8RWrlHs4shy8lNnFptNWa0afNGG009MrmIyad07NaphPT2jwuXo9nHrVwT/1Iq9/5Lv7zbxMr6q4y7LNc+Xgmi8SAAAAAAAAAAA8VqUZxcZJOL0aZzKKktMNbKTnWUSoyurum+T7bPcwsrFdT2uirOHEiyocEhlGaSoSvzg/FHzW5ZxsiVMvg6jPiXehioTh6yMlwWvft3v2N6NkZR5J+C0mmtlSz7OnVfq4O1Jc3/L8GPl5bs+2PX7ILJ78IhSgRHXluAnWnwR5f7pdEv3oTU0StlxR7GLk9Iu+Ew1OhTsrRjHWUn17ts3q64Uw0i0kooqme5y6z4I3VJfOW722MjKyna+K6/ZBOe/BEFIjABIZPmkqEu8H4o+a3LONkul/B3CbiXP8Ax16fSdOa/fc0bn2XQ/KZY8SRTM4yuVCXeD8MvJ7mHk4zpl8FecHEjyscEnkubSoSs7um/FHtut/qW8XKdL0+juE+JdI4mDh6xSXBa/F0sbisi48t+Czta2UnPMdGtU4oxslpfrLdmDlXRtnuK/krWNNkcVjgmvRShJ1uNL2YJ3fvVkvP4F/0+DdvL2RJUvu2XM2yyAAAAAAAAAAAAeK1KM4uMknF6NM5lFSWmNbKTnWUSoyurum+T7bMwsrFdT2uirOHHoiyocG2Neai4KTUJWbj0djtTkouKfhnu30ajg8OvLsBOtPgjy/3S6RX70JqaZWy0j2MXJ6Rd8JhadCnZWUY6yk+vdtm9XXCmGl0WklFFUz3OXWfBG6pL5y3e2xk5WU7Xxj1+yCc+XREFIjO3K8unWnwx0ivFLovzsTUUSulpdHUYuTN2c5TKhK6vKm+Uu2z3JMnFdL2uj2cOJGFQ4JDJ80lQl3g/FHzW5ZxsmVL+DuE+Jc/8den0nCa/fc0bn2XQ/KZY8SRTM4yuVCXeD8MvJ7mHk4zpl8FecOJHlY4Nqrz4fV8T4G7uN9LnfOXHjvwe7fRqODw7cqy2daXCtIrxS6L7vYsUY8rpaXXudRi5MvODwsKUVCCsl83u9zerrjXHjEtJJLSN5IegAAAAAAAAAAAAA8VqUZxcZJOL0aZzKKktM8a2UnOsolRldXdN8n22ZhZWK6ntdFacOP9CLKhwdeW4CdafBHl/ul0iv3oTU0ytlpHUY8vCLvhMLToU7K0YrWUn17ts3q64Uw0iykooqme5y6z4I3VJfOW722MnKy3a9R6IJz5EQUSM7cry6dafDHSK8Uui+72LGPRK6Wl0dRjyZecHhIUoqEFZL5vd92b1dca48YlpJJaR7r0Yzi4yScXo0zqUVJafQa2UnOsplQldXdN+GXbZ7/UwsrGdT2uitOHEjCocEhk+aSoS7wfij5rcs42TKl/B3GfEuf+OvT6ThNfvuaNz7LoflMs+JIpmcZXKhLvB+GXk9zDycZ0v4K04OJHlY4O3KstnWlwrSK8Uui+72LGPRK6Wl17nUYuTLzg8LClFQgrJfN7vuzerrjXHjEtJJLSN5IegAAAAAAAAAAAAAAAA8VqUZxcZJOL0aZzKKktM8a2QFT0Uhe6qyUe1k38/wAGe/TYb8N6IvoomMLhadCFo+zFatvr3bZdrrhTHS6JElFFTz3OXWfBG6pL5y3e2xkZWW7Xxj0QTny/oRBRIztyvLp1p8MdIrxS6L7vYsY9ErpaXR1GLky84LCQpQUIKyXze77s3q641x4xLSSS0jlzjNoUF/Kb5R832RFkZMaV57OZzUSFo+lU+L26cXH/AI3T/t6lGPqUt/cvBGrn7osnsVafJShNfNM1Ptsj+Uybw0UzOsplQldXdN+GXbZ7/Uw8nFdL2uitOHEjCocEhk+aSoS7wfij5rcs42S6X8HcJ8S6f469PpOnNfvuaNz7LoflMs+JIhn6KQv/AKsuHtZX+f4KX/jYb/3Mi+ivyTeDwsKcVCCsl/e7fVl+uuNceMSVJJaRvOz0AAAAAAAAAAAAAAAAAAAAAhvStv1Dty4o8Xu/9sUs/f0fBHb/ALSlmEVjMbX1vbrbmerXuD6BlMKSpR9V4O/V977n0dCgoL6fRbjrXg05zm0aEe9R+GPm9jjJyY0x+Tyc+KKRXrSnJzk7yerZgzm5vlLsrN7NZweF+yKjKFCEZaOzdu1235n0WLFxqSZagtRSOnFxg4SU7cFnxX5WJbFFxfLo6eteT57iFDilwNuF3wt87Hzc+Kk+PRUffg1HB4Wv0Nb4Kn8eJW99tf8A5Nj03fCX9SenpliNImAAAAAAAAAAAAAAAAAAAAAAAAPFalGUXGSvFqzRzKKktMNbKTnWUSoyurum+T7bPcw8rFdT2uirODiRZTODuyzNKlBvh1T5xfK/R+8sUZM6X46Ooycejlr1pTk5yd5PVsinOU3yl2eN78s1nB4Wn0fyO1qtVe1zjF9N3vt+rXw8PX3z79kTwr92WKpUUU5NpJatvkjSlJRW2TFLzzOHWfDHSkuXeW7+xh5WU7XpdFadm/CIgpEZ25Vls60uFaRXil0X3exYooldLS6O4xcmXnB4WNOChBWS/vd7m/XXGuPGJZSSWkbzs9AAAAAAAAAAAAAAAAAAAAAAAAAB4rUozi4yScXo0zmUVJaYa2UnOsolRldXdN8n22Zh5WK6ntdFWcOJFlM4ABafR7I7WrVVrzjF9N3vt0NfEw9ffP8AsieuHuyxVJqKcm0ktW3yRpSkorbJil55nDrPhjdUl06y3f2MPKyna9R6K0578IiCkRnbleWzrS4VpFeKXRfd7FjHoldLS69zqMXJl5weFhSioQVkvm93ub1dca48YlpJJaRvJD0AAAAAAAAAAAAAAAAAAAAAAAAAAAAHitSjOLjJJxejTOZRUlpgqWO9Gqqk/V2nB8rtKS99+ZkW+nzT+zyiu6n7Hfkno/wP1lWzkvDHmlu+7LGLhcHyn2dwr15ZP1KiinJtJLVt8kaDaitslKXnmcOs+GN1SX/bd/Yw8rKdr1HorTnyIgpEZ25Vls60uFaRXil0X3exYx8eV0tLr3O4xcmXnB4WFKKhBWS+b3fdm9XXGuPGJZSSWkbyQ9AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABTfSXM5Tm6SdoQdmv5Nc7+5mJm5DlJwXSK9k/OiEKBEduVZbOtLhWkV4pdF93sT0USulpde53GLky84PCwpRUIKyXze77s36641x4xLKSS0jeSHoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABTfSHKpxqSqRi5Qm+K6V7N87/AB6mJmY0lNyS2mV5we9nJluU1KskuFxh1k1p8O7IaMWdr60jmMGy7YPCwpRUIKyXze77s3a641x4xLKSS0jeSHoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP/9k=" style="width:44px;height:44px;object-fit:contain;flex-shrink:0;filter:drop-shadow(0 2px 6px rgba(30,58,138,0.3));">
+            <div style="display:flex;flex-direction:column;">
+                <b>Godavari Urban Multi-State Credit Co-Op Society Ltd.</b>
+                <span><i class="fas fa-file-signature"></i> Internal Branch Document Authorization Tool</span>
+            </div>
+        </div>
+        <div class="station-info-bar">
+            <span><b>Branch:</b> <span id="stnBranch">--</span></span>
+            <span><b>Local IP:</b> <span id="stnIP">--</span></span>
+            <span><b>Public IP:</b> <span id="stnPublicIP">--</span></span>
+            <span><b>Browser:</b> <span id="stnBrowser">--</span></span>
+        </div>
+        <div style="display:flex; gap:15px; align-items:center;">
+            <div id="currentUserBadge" class="user-badge"></div>
+            <button class="btn" style="width:auto; height:36px; background:#fee2e2; color:var(--danger); border:1px solid #fecaca; padding:0 10px;" onclick="logoutSystem()">
+                <i class="fas fa-sign-out-alt"></i> Exit
+            </button>
+        </div>
+    </div>
+
+    <div class="content">
+        <!-- Sidebar -->
+        <div class="sidebar">
+            <div class="sidebar-scroll-area">
+
+                <!-- Document Selection -->
+                <div class="card">
+                    <h4>1. Document Selection</h4>
+                    <input type="file" id="pdfUpload" accept=".pdf" style="width:100%; font-size:0.8rem; margin-bottom:12px;">
+                    <button class="btn btn-primary" onclick="previewPDF()">
+                        <i class="fas fa-file-import"></i> Load Document
+                    </button>
+                </div>
+
+                <!-- Signature Creation -->
+                <div id="sigCreationZone" class="card">
+                    <h4>2. Set Authorization Signature</h4>
+                    <canvas id="sigCanvas" width="300" height="130"></canvas>
+                    <div style="display:flex; gap:8px; margin-top:10px;">
+                        <button class="btn btn-outline" onclick="clearSig()">
+                            <i class="fas fa-eraser"></i> Clear
+                        </button>
+                        <button class="btn btn-primary" onclick="lockAndSaveSig('draw')">
+                            <i class="fas fa-save"></i> Save Drawing
+                        </button>
+                    </div>
+                    <div class="or-divider">—— OR UPLOAD IMAGE ——</div>
+                    <input type="file" id="sigFileInp" accept="image/*" style="display:none" onchange="processUploadedSig(this)">
+                    <button class="btn btn-outline" onclick="document.getElementById('sigFileInp').click()">
+                        <i class="fas fa-upload"></i> Choose Signature Image
+                    </button>
+                </div>
+
+                <!-- Saved Signature -->
+                <div class="card">
+                    <h4>Your Authorization Signature</h4>
+                    <div id="slots"></div>
+                    <div id="adminZone" class="hidden">
+                        <button class="btn btn-danger-outline" onclick="adminResetSignature()">
+                            <i class="fas fa-user-shield"></i> Admin: Reset Signature
+                        </button>
+                    </div>
+                </div>
+
+            </div>
+            <div class="sidebar-footer">
+                <button class="btn btn-success" onclick="downloadPDF()">
+                    <i class="fas fa-file-export"></i> Download Signed PDF
+                </button>
+            </div>
+        </div>
+
+        <!-- PDF Preview Area -->
+        <div class="preview-area">
+            <div class="pdf-toolbar">
+                <button onclick="changePage(-1)"><i class="fas fa-chevron-left"></i> Previous</button>
+                <span style="font-weight:bold;">Page <span id="pgNum">1</span> of <span id="pgTotal">1</span></span>
+                <button onclick="changePage(1)">Next <i class="fas fa-chevron-right"></i></button>
+            </div>
+            <div id="viewer">
+                <div id="pdfWrapper">
+                    <canvas id="pdfCanvas"></canvas>
+                    <div id="dragSigContainer">
+                        <img id="dragImg" src="">
+                        <div id="metaText" class="sig-meta-preview"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ══ CUSTOM ALERT / CONFIRM DIALOG ══ -->
+<div id="guDialog">
+    <div class="gu-dialog-box">
+        <div class="gu-dialog-header">
+            <div class="gu-dialog-icon" id="guDialogIcon"><i id="guDialogIconI" class="fas fa-info-circle"></i></div>
+            <div class="gu-dialog-title" id="guDialogTitle">Notice</div>
+        </div>
+        <div class="gu-dialog-body" id="guDialogBody"></div>
+        <div class="gu-dialog-footer" id="guDialogFooter"></div>
+    </div>
+</div>
+
+<!-- ══ DOWNLOAD TOAST ══ -->
+<div id="downloadToast">
+    <i class="fas fa-check-circle"></i>
+    <span id="downloadToastMsg">PDF Downloaded Successfully!</span>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════════════════════
+//  ██████╗ ██╗ ██████╗ ██╗████████╗ █████╗ ██╗      ███████╗██╗ ██████╗ ███╗   ██╗███████╗██████╗
+//  ██╔══██╗██║██╔════╝ ██║╚══██╔══╝██╔══██╗██║      ██╔════╝██║██╔════╝ ████╗  ██║██╔════╝██╔══██╗
+//  ██║  ██║██║██║  ███╗██║   ██║   ███████║██║      ███████╗██║██║  ███╗██╔██╗ ██║█████╗  ██████╔╝
+//  ██║  ██║██║██║   ██║██║   ██║   ██╔══██║██║      ╚════██║██║██║   ██║██║╚██╗██║██╔══╝  ██╔══██╗
+//  ██████╔╝██║╚██████╔╝██║   ██║   ██║  ██║███████╗ ███████║██║╚██████╔╝██║ ╚████║███████╗██║  ██║
+//  ╚═════╝ ╚═╝ ╚═════╝ ╚═╝   ╚═╝   ╚═╝  ╚═╝╚══════╝ ╚══════╝╚═╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝╚═╝  ╚═╝
+//
+//  MIGRATION: Google Apps Script + Sheets  →  SharePoint + Microsoft Graph API
+//  Branch-Side App (DigitalSigner) — Option A: PIN Login (no M365 account needed for branch)
+//
+//  ╔══════════════════════════════════════════════════════════════════════════════════╗
+//  ║           SHAREPOINT SETUP GUIDE  (Complete before using this file)            ║
+//  ╠══════════════════════════════════════════════════════════════════════════════════╣
+//  ║                                                                                ║
+//  ║  PRE-REQUISITE: Complete the IT Admin Panel setup first (Steps 1–4 there).     ║
+//  ║  The SharePoint lists and Azure App Registration are shared by both files.     ║
+//  ║                                                                                ║
+//  ║  ── STEP 1:  Azure App Registration (skip if already done for Admin Panel) ──  ║
+//  ║    a) portal.azure.com → Azure Active Directory → App Registrations            ║
+//  ║    b) New Registration:                                                        ║
+//  ║       Name:            GU-DigitalSigner-App                                   ║
+//  ║       Account type:    "Accounts in this org directory only"                  ║
+//  ║       Redirect URI:    Web  →  http://localhost  (or your hosting URL)        ║
+//  ║    c) After creation note down:                                                ║
+//  ║       • Application (client) ID  →  CLIENT_ID below                          ║
+//  ║       • Directory  (tenant) ID   →  TENANT_ID below                          ║
+//  ║    d) API Permissions → Add → Microsoft Graph → Delegated:                    ║
+//  ║       ✅ Sites.ReadWrite.All   (read/write SharePoint lists)                   ║
+//  ║       ✅ User.Read             (MSAL sign-in, not used by branch users)        ║
+//  ║       Click "Grant admin consent for [Your Org]"                              ║
+//  ║    e) Authentication → Advanced settings:                                     ║
+//  ║       ✅ Enable "Allow public client flows" (for silent token in HTML file)    ║
+//  ║                                                                                ║
+//  ║  ── STEP 2:  SharePoint Site & List (skip if already done for Admin Panel) ── ║
+//  ║    Already created in Admin Panel setup? Skip to Step 3.                      ║
+//  ║    Otherwise:                                                                  ║
+//  ║    a) Go to https://[tenant].sharepoint.com → Create Team Site                ║
+//  ║       Site name:  GU-DigitalSigner                                            ║
+//  ║    b) In the site, create list "GU_Branches" with these columns:              ║
+//  ║       ┌─────────────────────┬─────────────────────────────────────────┐       ║
+//  ║       │ Column Name         │ Type                                    │       ║
+//  ║       ├─────────────────────┼─────────────────────────────────────────┤       ║
+//  ║       │ Branch              │ Single line of text                     │       ║
+//  ║       │ EmpID               │ Single line of text                     │       ║
+//  ║       │ EmpName             │ Single line of text                     │       ║
+//  ║       │ Post                │ Single line of text                     │       ║
+//  ║       │ AllowedIP           │ Single line of text                     │       ║
+//  ║       │ PassHash            │ Single line of text                     │       ║
+//  ║       │ ActKeyHash          │ Single line of text                     │       ║
+//  ║       │ ActKey              │ Single line of text                     │       ║
+//  ║       │ BranchEmail         │ Single line of text                     │       ║
+//  ║       │ WorkstationStatus   │ Single line of text                     │       ║
+//  ║       │ ManagerStatus       │ Single line of text                     │       ║
+//  ║       │ AppEmailSentAt      │ Single line of text                     │       ║
+//  ║       │ AuthRequestedAt     │ Single line of text                     │       ║
+//  ║       │ AuthorizedAt        │ Single line of text                     │       ║
+//  ║       │ PrimaryEmpID        │ Single line of text                     │       ║
+//  ║       │ SignatureRevoked     │ Yes/No                                  │       ║
+//  ║       │ SignatureVersion     │ Single line of text                     │       ║
+//  ║       │ SignatureRevokedAt   │ Single line of text                     │       ║
+//  ║       │ FirstLogin          │ Yes/No                                  │       ║
+//  ║       │ Activated           │ Yes/No                                  │       ║
+//  ║       └─────────────────────┴─────────────────────────────────────────┘       ║
+//  ║    c) Create list "GU_Settings" with columns: SettingKey, SettingValue        ║
+//  ║       Add one item: SettingKey = ADMIN_PASS_HASH, SettingValue = (your hash)  ║
+//  ║    d) Create list "GU_BranchJourney" with columns:                            ║
+//  ║       Timestamp, Branch, EmpID, EmpName, Post, AllowedIP,                    ║
+//  ║       Status, Action, Details, ChangedBy                                      ║
+//  ║                                                                                ║
+//  ║  ── STEP 3:  Import Your Existing Data ──                                     ║
+//  ║    Open DigitalSignerDB.xlsx → copy the "Branches" sheet data into            ║
+//  ║    GU_Branches list using SharePoint Quick Edit (grid view).                  ║
+//  ║    Copy BranchJourney sheet → GU_BranchJourney list.                         ║
+//  ║    Set ADMIN_PASS_HASH in GU_Settings (generate from Admin Panel Hash Tool).  ║
+//  ║                                                                                ║
+//  ║  ── STEP 4:  Fill in the 4 config values below, save, and test ──             ║
+//  ║                                                                                ║
+//  ║  ── HOW THE BRANCH FLOW WORKS (Option A — PIN Login) ──                       ║
+//  ║    Branch staff do NOT need a Microsoft 365 account.                          ║
+//  ║    The app itself uses a background service token (via MSAL) to read/write    ║
+//  ║    SharePoint. Branch users still just type their Employee ID + PIN.          ║
+//  ║    All data goes to SharePoint instead of Google Sheets.                      ║
+//  ║    Email sending is handled by the IT Admin Panel (Outlook/Graph).            ║
+//  ║                                                                                ║
+//  ╚══════════════════════════════════════════════════════════════════════════════════╝
+
+// ─── ✏️  FILL THESE 4 VALUES — everything else is automatic ──────────────────────
+const CLIENT_ID            = "106f2386-db75-436c-8e08-21c2ea14958e";   // ✅ Azure App Client ID
+const TENANT_ID            = "e47e4128-1c1b-4510-a440-415145dc1cde";   // ✅ Azure Tenant ID
+const SHAREPOINT_HOST      = "godavariurban.sharepoint.com";             // ✅ SharePoint host
+const SHAREPOINT_SITE_NAME = "GUMCCSLFDCOMMISTION";                      // ✅ SharePoint site name
+// ─────────────────────────────────────────────────────────────────────────────────
+
+// ── Derived constants
+const GRAPH         = "https://graph.microsoft.com/v1.0";
+const SP_SITE_PATH  = `/sites/${SHAREPOINT_HOST}:/sites/${SHAREPOINT_SITE_NAME}`;
+
+// ── MSAL configuration (silent background token — no login popup for branch users)
+const _msalConfig = {
+    auth: {
+        clientId:   CLIENT_ID,
+        authority:  `https://login.microsoftonline.com/${TENANT_ID}`,
+        redirectUri: window.location.protocol === "file:"
+            ? "http://localhost"
+            : window.location.href.split("?")[0].split("#")[0]
+    },
+    cache: { cacheLocation: "localStorage", storeAuthStateInCookie: true }
+};
+const _msalInstance = new msal.PublicClientApplication(_msalConfig);
+const _SP_SCOPES    = ["Sites.ReadWrite.All"];
+
+// ── CRITICAL: Initialize MSAL before any API call (required in MSAL v3+)
+let _msalReady = false;
+async function _ensureMsalReady() {
+    if (_msalReady) return;
+    await _msalInstance.initialize();
+    await _msalInstance.handleRedirectPromise().catch(() => {});
+    _msalReady = true;
+}
+
+// ── Cache
+let _spSiteId   = null;
+let _spToken    = null;
+let _spTokenExp = 0;
+
+// ── Get SharePoint access token silently
+async function _getSpToken() {
+    await _ensureMsalReady();
+    const now = Date.now();
+    if (_spToken && _spTokenExp > now + 60000) return _spToken;
+    const accounts = _msalInstance.getAllAccounts();
+    if (accounts.length > 0) {
+        try {
+            const r = await _msalInstance.acquireTokenSilent({ scopes: _SP_SCOPES, account: accounts[0] });
+            _spToken    = r.accessToken;
+            _spTokenExp = now + (r.expiresOn ? (r.expiresOn.getTime() - now) : 3600000);
+            return _spToken;
+        } catch(e) { /* fall through to popup */ }
+    }
+    try {
+        const r = await _msalInstance.loginPopup({ scopes: _SP_SCOPES, prompt: "none" });
+        _spToken    = r.accessToken;
+        _spTokenExp = now + 3600000;
+        return _spToken;
+    } catch(e) {
+        const r = await _msalInstance.loginPopup({ scopes: _SP_SCOPES });
+        _spToken    = r.accessToken;
+        _spTokenExp = now + 3600000;
+        return _spToken;
+    }
+}
+
+// ── Generic Graph API call
+async function _graph(method, endpoint, body) {
+    const token = await _getSpToken();
+    const opts = {
+        method,
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }
+    };
+    if (body) opts.body = JSON.stringify(body);
+    const res = await fetch(GRAPH + endpoint, opts);
+    if (res.status === 204) return {};
+    const data = await res.json();
+    if (!res.ok) throw new Error(data?.error?.message || `Graph error ${res.status}`);
+    return data;
+}
+
+// ── Get SharePoint Site ID (cached)
+async function _getSiteId() {
+    if (_spSiteId) return _spSiteId;
+    const d  = await _graph("GET", SP_SITE_PATH);
+    _spSiteId = d.id;
+    return _spSiteId;
+}
+
+// ── List ID cache
+const _listIdCache = {};
+async function _getListId(listName) {
+    if (_listIdCache[listName]) return _listIdCache[listName];
+    const siteId = await _getSiteId();
+    const d = await _graph("GET", `/sites/${siteId}/lists?$filter=displayName eq '${listName}'`);
+    if (!d.value?.length) throw new Error(`SharePoint list "${listName}" not found. Check setup guide.`);
+    _listIdCache[listName] = d.value[0].id;
+    return _listIdCache[listName];
+}
+
+// ── Find a single item by field value
+async function _spFind(listName, fieldName, value) {
+    const siteId = await _getSiteId();
+    const listId = await _getListId(listName);
+    const enc    = encodeURIComponent(`fields/${fieldName} eq '${value}'`);
+    const d      = await _graph("GET", `/sites/${siteId}/lists/${listId}/items?$expand=fields&$filter=${enc}&$top=5`);
+    if (!d.value?.length) return null;
+    return { _id: d.value[0].id, ...d.value[0].fields };
+}
+
+// ── Update a list item
+async function _spPatch(listName, spId, fields) {
+    const siteId = await _getSiteId();
+    const listId = await _getListId(listName);
+    await _graph("PATCH", `/sites/${siteId}/lists/${listId}/items/${spId}/fields`, fields);
+}
+
+// ── Create a list item
+async function _spPost(listName, fields) {
+    const siteId = await _getSiteId();
+    const listId = await _getListId(listName);
+    const d = await _graph("POST", `/sites/${siteId}/lists/${listId}/items`, { fields });
+    return { _id: d.id, ...d.fields };
+}
+
+// ── Append to BranchJourney log
+async function _logJourney(branch, empId, empName, post, ip, status, action, details) {
+    await _spPost("GU_BranchJourney", {
+        Timestamp: new Date().toISOString(), Branch: branch,
+        EmpID: empId, EmpName: empName, Post: post,
+        AllowedIP: ip, Status: status, Action: action,
+        Details: details, ChangedBy: "Branch App"
+    });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  callScript() — REPLACEMENT DISPATCHER
+//  Drop-in replacement: same function signature, routes to SharePoint via Graph
+// ═══════════════════════════════════════════════════════════════════════════════
+async function callScript(payload) {
+    switch (payload.action) {
+
+        // ── Step 1 of activation: verify Employee ID exists and IP matches
+        case "verifyIdentity": {
+            const { empId, ip } = payload;
+            const item = await _spFind("GU_Branches", "EmpID", empId);
+            if (!item) return { ok: false, msg: "Employee ID not found. Please contact IT." };
+
+            const status = String(item.ManagerStatus || "").toUpperCase();
+            if (status === "BRANCH_CLOSED") {
+                return { ok: false, msg: "This branch is closed. Please contact IT." };
+            }
+            // IP check
+            const allowedIP = String(item.AllowedIP || "").trim().toUpperCase();
+            const detectedIP = String(ip || "").trim().toUpperCase();
+            if (allowedIP && detectedIP && allowedIP !== detectedIP) {
+                return { ok: false, msg: `Network IP mismatch. Expected: ${item.AllowedIP}. Detected: ${ip}.\nPlease connect from your registered branch network.` };
+            }
+
+            // Mark as auth-requested if not already authorized
+            const wsStatus = String(item.WorkstationStatus || "").toUpperCase();
+            if (wsStatus !== "AUTHORIZED" && wsStatus !== "FILE_SENT") {
+                // Already file sent — no change needed
+            } else if (wsStatus === "FILE_SENT") {
+                // Update to IT_AUTH_PENDING
+                await _spPatch("GU_Branches", item._id, {
+                    WorkstationStatus: "IT_AUTH_PENDING",
+                    AuthRequestedAt:   new Date().toISOString()
+                });
+                await _logJourney(item.Branch, empId, item.EmpName, item.Post, ip,
+                    "IT_AUTH_PENDING", "IDENTITY_VERIFIED",
+                    "Branch verified Employee ID and IP. Pending IT workstation authorization.");
+            }
+
+            const isAuthorized = wsStatus === "AUTHORIZED" ||
+                                 String(item.Activated || "").toString() === "true" ||
+                                 item.Activated === true;
+            return {
+                ok: true,
+                name:       item.EmpName   || empId,
+                branch:     item.Branch    || "",
+                authorized: isAuthorized
+            };
+        }
+
+        // ── Step 2 of activation: check if IT has authorized this workstation
+        case "completeWorkstationAuthorization": {
+            const { empId, ip } = payload;
+            const item = await _spFind("GU_Branches", "EmpID", empId);
+            if (!item) return { ok: false, msg: "Branch record not found." };
+
+            const wsStatus  = String(item.WorkstationStatus || "").toUpperCase();
+            const activated = item.Activated === true || String(item.Activated || "").toString() === "true";
+
+            if (!activated && wsStatus !== "AUTHORIZED") {
+                return { ok: false, msg: "Pending IT Department authorization. Please wait for IT to authorize your workstation." };
+            }
+            // Mark locally as activated
+            return { ok: true, name: item.EmpName || empId };
+        }
+
+        // ── Login with Employee ID + Password Hash (Option A PIN login)
+        case "login": {
+            const { empId, passHash } = payload;
+            const item = await _spFind("GU_Branches", "EmpID", empId);
+            if (!item) return { ok: false, clearLocal: true, msg: "Employee record not found. Please reactivate." };
+
+            const status   = String(item.ManagerStatus   || "").toUpperCase();
+            const wsStatus = String(item.WorkstationStatus || "").toUpperCase();
+            const activated = item.Activated === true || String(item.Activated || "").toString() === "true";
+
+            // Check if manager was deactivated by IT
+            if (status === "BRANCH_CLOSED") {
+                return { ok: false, clearLocal: true, msg: "This branch has been closed by IT." };
+            }
+            if (!activated && wsStatus !== "AUTHORIZED") {
+                return { ok: false, clearLocal: true, msg: "This workstation is no longer authorized. Please re-activate." };
+            }
+
+            // First login — no password set yet
+            const isFirst = item.FirstLogin === true || String(item.FirstLogin || "").toString() === "true";
+            if (isFirst || !item.PassHash) {
+                return { ok: true, firstLogin: true, empId: item.EmpID, name: item.EmpName,
+                         branch: item.Branch, post: item.Post };
+            }
+
+            // Verify password hash
+            const storedHash = String(item.PassHash || "").trim().toLowerCase();
+            const inputHash  = String(passHash || "").trim().toLowerCase();
+            if (storedHash !== inputHash) {
+                return { ok: false, msg: "Authentication Failed! Incorrect password." };
+            }
+
+            // Check if signature was revoked by IT
+            if (item.SignatureRevoked === true || String(item.SignatureRevoked || "").toString() === "true") {
+                // Return ok but with flag so app clears the saved signature
+                return { ok: true, firstLogin: false, empId: item.EmpID, name: item.EmpName,
+                         branch: item.Branch, post: item.Post, signatureRevoked: true,
+                         signatureVersion: item.SignatureVersion || "" };
+            }
+
+            return { ok: true, firstLogin: false, empId: item.EmpID, name: item.EmpName,
+                     branch: item.Branch, post: item.Post };
+        }
+
+        // ── Set password (first login or reset)
+        case "setPassword": {
+            const { empId, passHash } = payload;
+            const item = await _spFind("GU_Branches", "EmpID", empId);
+            if (!item) return { ok: false, msg: "Employee record not found." };
+            await _spPatch("GU_Branches", item._id, {
+                PassHash:   passHash,
+                FirstLogin: false,
+                Activated:  true,
+                WorkstationStatus: "AUTHORIZED"
+            });
+            await _logJourney(item.Branch, empId, item.EmpName, item.Post, "",
+                "AUTHORIZED", "PASSWORD_SET", "Branch set their password on first login.");
+            return { ok: true };
+        }
+
+        // ── Admin reset signature (verify admin password via GU_Settings)
+        case "adminResetSig": {
+            const { adminPassHash } = payload;
+            const setting = await _spFind("GU_Settings", "SettingKey", "ADMIN_PASS_HASH");
+            if (!setting) return { ok: false, msg: "Admin password not configured in SharePoint Settings." };
+            const stored = String(setting.SettingValue || "").trim().toLowerCase();
+            const input  = String(adminPassHash || "").trim().toLowerCase();
+            if (stored !== input) return { ok: false, msg: "Incorrect Admin Password." };
+            return { ok: true };
+        }
+
+        // ── Check device/workstation status on every app open
+        case "checkDeviceStatus": {
+            const { empId, ip } = payload;
+            const item = await _spFind("GU_Branches", "EmpID", empId);
+            if (!item) return { ok: true, clearLocal: true, msg: "Employee record not found." };
+
+            const status    = String(item.ManagerStatus   || "").toUpperCase();
+            const activated = item.Activated === true || String(item.Activated || "").toString() === "true";
+
+            // If IT closed the branch or deactivated the manager → force re-activation
+            if (status === "BRANCH_CLOSED" || !activated) {
+                return { ok: true, clearLocal: true,
+                    msg: status === "BRANCH_CLOSED"
+                        ? "This branch has been closed by IT."
+                        : "Your workstation authorization has been revoked by IT." };
+            }
+
+            // Check for signature revocation
+            if (item.SignatureRevoked === true || String(item.SignatureRevoked || "").toString() === "true") {
+                return { ok: true, clearLocal: false, signatureRevoked: true,
+                    signatureVersion: item.SignatureVersion || "" };
+            }
+
+            return { ok: true, clearLocal: false };
+        }
+
+        default:
+            return { ok: false, msg: `Unknown action: ${payload.action}` };
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  CUSTOM DIALOG — replaces all alert() and confirm()
+//  guAlert(msg, type)  → Promise (resolves on OK)
+//  guConfirm(msg, type, okLabel) → Promise<boolean>
+// ═══════════════════════════════════════════════════════════════
+const DIALOG_ICONS = {
+    info:    { cls:'info',    icon:'fa-info-circle',      title:'Notice' },
+    success: { cls:'success', icon:'fa-check-circle',     title:'Success' },
+    warning: { cls:'warning', icon:'fa-exclamation-circle', title:'Warning' },
+    danger:  { cls:'danger',  icon:'fa-times-circle',     title:'Error' },
+    confirm: { cls:'confirm', icon:'fa-question-circle',  title:'Confirm' },
+    session: { cls:'warning', icon:'fa-clock',            title:'Session Expired' },
+    lock:    { cls:'danger',  icon:'fa-lock',             title:'Access Denied' },
+};
+
+function _openGuDialog(msg, type, buttons) {
+    return new Promise(resolve => {
+        const d  = document.getElementById('guDialog');
+        const cfg = DIALOG_ICONS[type] || DIALOG_ICONS.info;
+        document.getElementById('guDialogIconI').className = 'fas ' + cfg.icon;
+        document.getElementById('guDialogIcon').className  = 'gu-dialog-icon ' + cfg.cls;
+        document.getElementById('guDialogTitle').textContent = cfg.title;
+        document.getElementById('guDialogBody').textContent  = msg;
+        const footer = document.getElementById('guDialogFooter');
+        footer.innerHTML = '';
+        buttons.forEach(b => {
+            const btn = document.createElement('button');
+            btn.textContent = b.label;
+            btn.className   = 'gu-btn ' + b.cls;
+            btn.onclick = () => { d.classList.remove('show'); resolve(b.value); };
+            footer.appendChild(btn);
+        });
+        d.classList.add('show');
+    });
+}
+
+function guAlert(msg, type) {
+    type = type || 'info';
+    return _openGuDialog(msg, type, [
+        { label: 'OK', cls: type === 'danger' ? 'gu-btn-danger' : 'gu-btn-primary', value: true }
+    ]);
+}
+
+function guConfirm(msg, type, okLabel, cancelLabel) {
+    type      = type      || 'confirm';
+    okLabel   = okLabel   || 'Yes, Confirm';
+    cancelLabel = cancelLabel || 'Cancel';
+    return _openGuDialog(msg, type, [
+        { label: cancelLabel, cls: 'gu-btn-outline', value: false },
+        { label: okLabel,     cls: type === 'danger' ? 'gu-btn-danger' : 'gu-btn-primary', value: true }
+    ]);
+}
+
+function showDownloadToast(fileName) {
+    const toast = document.getElementById('downloadToast');
+    document.getElementById('downloadToastMsg').textContent = 'PDF Saved: ' + fileName;
+    toast.classList.add('show');
+    clearTimeout(toast._t);
+    toast._t = setTimeout(() => toast.classList.remove('show'), 4500);
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  STATE
+// ═══════════════════════════════════════════════════════════════
+let currentUser   = null;   // { name, branch, post, empId }
+let currentIP     = "";
+let pendingEmpId  = "";     // emp id during activation flow
+
+// ── Brute-force lockout state ──
+const MAX_LOGIN_ATTEMPTS  = 5;
+const LOCKOUT_DURATION_MS = 15 * 60 * 1000; // 15 minutes
+let loginAttempts = 0;
+let lockoutUntil  = 0;
+
+// ── Session idle timeout (20 min) ──
+const SESSION_TIMEOUT_MS = 20 * 60 * 1000;
+let idleTimer = null;
+
+// ═══════════════════════════════════════════════════════════════
+//  UTILITIES
+// ═══════════════════════════════════════════════════════════════
+async function sha256(text) {
+    const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,"0")).join("");
+}
+
+// (callScript dispatcher defined above in the SharePoint layer)
+
+
+
+function clearLocalAuthorization(empId) {
+    if (empId) localStorage.removeItem("sig_" + empId);
+    localStorage.removeItem("gu_activated_empId");
+    localStorage.removeItem("gu_pending_empId");
+    pendingEmpId = "";
+    currentUser = null;
+}
+
+async function enforceDeviceStatus(empId) {
+    const res = await callScript({
+        action: "checkDeviceStatus",
+        empId: empId,
+        ip: currentIP
+    });
+
+    if (res.ok && res.clearLocal) {
+        clearLocalAuthorization(empId);
+        await guAlert((res.msg || "This workstation was deactivated by IT.") + "\n\nPlease activate again with the current branch manager details.", 'danger');
+        location.reload();
+        return false;
+    }
+
+    // Handle signature revoked by IT
+    if (res.ok && res.signatureRevoked) {
+        const sigKey = "sig_" + empId;
+        const storedVersion = localStorage.getItem(sigKey + "_version");
+        const serverVersion = res.signatureVersion || "";
+        // Only clear if version changed or no version tracking (legacy)
+        if (!serverVersion || storedVersion !== serverVersion) {
+            localStorage.removeItem(sigKey);
+            localStorage.removeItem(sigKey + "_version");
+        }
+    }
+
+    return true;
+}
+
+function showError(id, msg) {
+    const el = document.getElementById(id);
+    el.innerText = msg;
+    el.style.display = "block";
+}
+function hideError(id) {
+    document.getElementById(id).style.display = "none";
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  IP DETECTION (WebRTC with fallback manual entry)
+//  Priority: 172.22.x.x (bank LAN) → 192.168.x.x → 10.x.x.x → manual
+// ═══════════════════════════════════════════════════════════════
+function detectIP() {
+    return new Promise((resolve) => {
+        const candidates = [];
+        let resolved = false;
+        const pc = new RTCPeerConnection({ iceServers: [] });
+        pc.createDataChannel("");
+        pc.createOffer().then(o => pc.setLocalDescription(o)).catch(() => {});
+
+        pc.onicecandidate = (e) => {
+            if (e && e.candidate) {
+                const match = e.candidate.candidate.match(/([0-9]{1,3}(\.[0-9]{1,3}){3})/);
+                if (match) {
+                    const ip = match[1];
+                    if (ip === "127.0.0.1" || ip.startsWith("169.254") || ip.startsWith("0.")) return;
+                    if (!candidates.includes(ip)) candidates.push(ip);
+                }
+            }
+        };
+
+        setTimeout(() => {
+            try { pc.close(); } catch(e) {}
+            if (resolved) return;
+            resolved = true;
+
+            // Priority 1: bank LAN range
+            const bankIP = candidates.find(ip => ip.startsWith("172.22."));
+            // Priority 2: common LAN ranges
+            const lanIP  = candidates.find(ip => ip.startsWith("192.168.") || ip.startsWith("10."));
+            const detected = bankIP || lanIP || candidates[0] || "";
+
+            const label = document.getElementById("ipLabel");
+            if (detected) {
+                currentIP = detected;
+                label.innerText = "NETWORK IP: " + detected;
+                // stnIP will be set when launchMainApp runs — currentIP is ready by then
+                resolve(detected);
+            } else {
+                // IP could not be detected — block the app entirely.
+                // Manual entry is NOT allowed for security — IP must always come from the system.
+                label.innerHTML = "";
+                showIPBlockedError();
+                resolve("");
+            }
+        }, 2000);
+    });
+}
+
+function showIPBlockedError() {
+    // Disable the Verify button so nothing can proceed
+    const btn = document.querySelector("#authStep1 button");
+    if (btn) btn.disabled = true;
+
+    const label = document.getElementById("ipLabel");
+    label.innerHTML =
+        '<div style="background:#1e1b2e;border:1px solid #ef4444;border-radius:10px;padding:14px 16px;margin-top:8px;text-align:left;">' +
+        '<div style="color:#f87171;font-weight:700;font-size:0.9rem;margin-bottom:6px;">' +
+        '<i class="fas fa-exclamation-triangle"></i> &nbsp;Network IP Could Not Be Detected</div>' +
+        '<div style="color:#94a3b8;font-size:0.8rem;line-height:1.7;">' +
+        'This app cannot start without detecting your network IP address.<br>' +
+        'This is a security requirement — IP is never entered manually.<br><br>' +
+        '<b style="color:#fbbf24;">Please contact IT Helpdesk for assistance.</b>' +
+        '</div></div>';
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  APP INIT — shows correct screen INSTANTLY, detects IP in background
+// ═══════════════════════════════════════════════════════════════
+async function initApp() {
+    const activatedEmpId = localStorage.getItem("gu_activated_empId");
+    const pendingStoredEmpId = localStorage.getItem("gu_pending_empId");
+
+    if (!activatedEmpId) {
+        document.getElementById("authOverlay").style.display  = "flex";
+        document.getElementById("loginOverlay").style.display = "none";
+        detectIP();
+
+        if (pendingStoredEmpId) {
+            pendingEmpId = pendingStoredEmpId;
+            document.getElementById("displayReqId").innerText = pendingStoredEmpId;
+            document.getElementById("authPendingMsg").innerText = "Your Employee ID and IP were already verified. Pending to IT Department for workstation authorization.";
+            document.getElementById("authStep1").classList.add("hidden");
+            document.getElementById("authStep2").classList.remove("hidden");
+        }
+    } else {
+        // Already activated — show login screen IMMEDIATELY
+        pendingEmpId = activatedEmpId;
+        document.getElementById("authOverlay").style.display  = "none";
+        document.getElementById("loginOverlay").style.display = "flex";
+        document.getElementById("loginEmpIdDisplay").innerHTML =
+            '<i class="fas fa-id-badge"></i> ' + activatedEmpId;
+
+        // Detect local network IP on every app open, including already-activated workstations.
+        detectIP();
+
+        // Device status check runs after screen is visible
+        try {
+            const isStillAllowed = await enforceDeviceStatus(activatedEmpId);
+            if (!isStillAllowed) return;
+        } catch (err) {
+            console.warn("Could not verify device status. Login will verify again.", err);
+        }
+    }
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+//  AUTH FLOW — Step 1: Verify employee and branch IP
+// ═══════════════════════════════════════════════════════════════
+async function verifyIdentity() {
+    const empId = document.getElementById("empIdAuth").value.trim();
+    if (!empId) { showError("authError", "Please enter your Employee ID."); return; }
+    hideError("authError");
+
+    if (!currentIP || currentIP === "unknown" || currentIP === "") {
+        showError("authError", "Network IP could not be detected automatically. Please contact IT Helpdesk.");
+        return;
+    }
+
+    document.getElementById("authLoader").style.display = "block";
+
+    try {
+        const res = await callScript({
+            action: "verifyIdentity",
+            empId:  empId,
+            ip:     currentIP
+        });
+
+        if (!res.ok) {
+            showError("authError", res.msg || "Verification failed.");
+            return;
+        }
+
+        // Success - show IT authorization status
+        pendingEmpId = empId;
+        localStorage.setItem("gu_pending_empId", empId);
+        document.getElementById("displayReqId").innerText = (res.branch || "Branch") + " | " + (res.name || empId);
+        if (res.authorized) {
+            document.getElementById("authPendingMsg").innerText = "IT Department has authorized your workstation. Click Check IT Authorization to proceed.";
+        } else {
+            document.getElementById("authPendingMsg").innerText = "Your IP and Employee ID are verified. Pending to IT Department for workstation authorization.";
+        }
+        document.getElementById("authStep1").classList.add("hidden");
+        document.getElementById("authStep2").classList.remove("hidden");
+
+    } catch (err) {
+        showError("authError", "Network error. Check internet connection and try again.");
+    } finally {
+        document.getElementById("authLoader").style.display = "none";
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  AUTH FLOW — Step 2: Wait for IT workstation authorization
+// ═══════════════════════════════════════════════════════════════
+async function checkITAuthorization() {
+    hideError("activateError");
+    const btn = document.getElementById("checkAuthBtn");
+    const originalHtml = btn ? btn.innerHTML : "";
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner"></span> Checking IT Authorization...';
+    }
+
+    try {
+        const res = await callScript({
+            action:  "completeWorkstationAuthorization",
+            empId:   pendingEmpId,
+            ip:      currentIP
+        });
+
+        if (!res.ok) {
+            showError("activateError", res.msg || "Pending IT Department authorization.");
+            return;
+        }
+
+        // Save activated emp id locally
+        localStorage.setItem("gu_activated_empId", pendingEmpId);
+        localStorage.removeItem("gu_pending_empId");
+        await guAlert("IT Department has authorized your workstation. You can proceed now, " + res.name + ".", 'success');
+        location.reload();
+
+    } catch (err) {
+        showError("activateError", "Network error. Please try again.");
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = originalHtml;
+        }
+    }
+}
+
+function resetAuthFlow() {
+    document.getElementById("authStep1").classList.remove("hidden");
+    document.getElementById("authStep2").classList.add("hidden");
+    document.getElementById("empIdAuth").value = "";
+    localStorage.removeItem("gu_pending_empId");
+    pendingEmpId = "";
+    hideError("authError");
+    hideError("activateError");
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  LOGIN  (with brute-force lockout)
+// ═══════════════════════════════════════════════════════════════
+async function handleLogin() {
+    // Check lockout first
+    const now = Date.now();
+    if (lockoutUntil > now) {
+        const mins = Math.ceil((lockoutUntil - now) / 60000);
+        showError("loginError", `Too many failed attempts. Try again in ${mins} minute(s).`);
+        document.getElementById("passInput").value = "";
+        return;
+    }
+
+    const passPlain = document.getElementById("passInput").value;
+    if (!passPlain) return;
+
+    hideError("loginError");
+    document.getElementById("loginLoader").style.display = "block";
+    document.getElementById("loginBtn").disabled = true;
+
+    const passHash = await sha256(passPlain);
+
+    try {
+        const res = await callScript({
+            action:   "login",
+            empId:    pendingEmpId,
+            passHash: passHash
+        });
+
+        if (!res.ok) {
+            if (res.clearLocal) {
+                clearLocalAuthorization(pendingEmpId);
+                await guAlert((res.msg || "This manager/workstation was deactivated by IT.") + "\n\nPlease activate again with the current branch manager details.", 'danger');
+                location.reload();
+                return;
+            }
+            // Increment failed attempts
+            loginAttempts++;
+            const remaining = MAX_LOGIN_ATTEMPTS - loginAttempts;
+            if (loginAttempts >= MAX_LOGIN_ATTEMPTS) {
+                lockoutUntil  = Date.now() + LOCKOUT_DURATION_MS;
+                loginAttempts = 0;
+                showError("loginError", "Too many failed attempts. Locked for 15 minutes.");
+            } else {
+                showError("loginError", `Authentication Failed! (${remaining} attempt${remaining !== 1 ? "s" : ""} remaining)`);
+            }
+            document.getElementById("passInput").value = "";
+            return;
+        }
+
+        // Reset counter on success
+        loginAttempts = 0;
+        lockoutUntil  = 0;
+
+        if (res.firstLogin) {
+            // Force password change on first login
+            openSecurePrompt(
+                "Set Permanent Password",
+                "This is your first login. Set a new password (min 8 characters):",
+                async (newPass) => {
+                    if (!newPass || newPass.length < 8) {
+                        await guAlert("Minimum 8 characters required.", 'warning');
+                        return;
+                    }
+                    const newHash = await sha256(newPass);
+                    try {
+                        const setRes = await callScript({
+                            action:   "setPassword",
+                            empId:    res.empId,
+                            passHash: newHash
+                        });
+                        if (setRes.ok) {
+                            await guAlert("Password set successfully! Please login with your new password.", 'success');
+                            location.reload();
+                        } else {
+                            await guAlert("Error saving password: " + (setRes.msg || "Unknown error"), 'danger');
+                        }
+                    } catch (e) {
+                        await guAlert("Network error while saving password.", 'danger');
+                    }
+                }
+            );
+            return;
+        }
+
+        // Successful login
+        currentUser = {
+            name:    res.name,
+            branch:  res.branch,
+            post:    res.post,
+            empCode: res.empId
+        };
+
+        if (!currentIP) await detectIP();
+
+        // Load saved signature from localStorage (keyed by empId)
+        const sigKey = "sig_" + res.empId;
+
+        // If IT revoked signature via SharePoint, clear local copy
+        if (res.signatureRevoked) {
+            const storedVersion = localStorage.getItem(sigKey + "_version");
+            const serverVersion = res.signatureVersion || "";
+            if (!serverVersion || storedVersion !== serverVersion) {
+                localStorage.removeItem(sigKey);
+                localStorage.removeItem(sigKey + "_version");
+            }
+        }
+
+        currentUser.savedSig = localStorage.getItem(sigKey) || null;
+
+        launchMainApp();
+
+    } catch (err) {
+        showError("loginError", "Network error. Please check connection.");
+    } finally {
+        document.getElementById("loginLoader").style.display = "none";
+        document.getElementById("loginBtn").disabled = false;
+    }
+}
+
+function launchMainApp() {
+    document.getElementById("loginOverlay").style.display = "none";
+    document.getElementById("mainApp").style.display      = "flex";
+
+    // Populate header info
+    document.getElementById("currentUserBadge").innerHTML =
+        '<i class="fas fa-user-check"></i> ' + currentUser.name + ' | ' + currentUser.post;
+    document.getElementById("stnBranch").innerText = currentUser.branch;
+    // By login time, IP detection has always completed (user went through full auth flow)
+    document.getElementById("stnIP").innerText = currentIP || "N/A";
+
+    // Browser detection
+    const ua = navigator.userAgent;
+    let browser = "Unknown";
+    if (ua.includes("Firefox"))     browser = "Firefox";
+    else if (ua.includes("Edg"))    browser = "Edge";
+    else if (ua.includes("Chrome")) browser = "Chrome";
+    else if (ua.includes("Safari")) browser = "Safari";
+    document.getElementById("stnBrowser").innerText = browser;
+
+    // Public IP
+    fetch("https://api.ipify.org?format=json")
+        .then(r => r.json())
+        .then(d => document.getElementById("stnPublicIP").innerText = d.ip)
+        .catch(() => document.getElementById("stnPublicIP").innerText = "N/A");
+
+    refreshSignatureUI();
+    startIdleTimer();
+}
+
+// ── Idle session auto-logout ──
+function startIdleTimer() {
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(async () => {
+        if (!currentUser) return;
+        await guAlert("Your session expired due to inactivity (20 minutes).\nPlease login again.", 'session');
+        forceLogout();
+    }, SESSION_TIMEOUT_MS);
+}
+
+function resetIdleTimer() {
+    if (!currentUser) return;
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(async () => {
+        if (!currentUser) return;
+        await guAlert("Your session expired due to inactivity (20 minutes).\nPlease login again.", 'session');
+        forceLogout();
+    }, SESSION_TIMEOUT_MS);
+}
+
+function forceLogout() {
+    currentUser = null;
+    clearTimeout(idleTimer);
+
+    // ── Clear document state so next login starts fresh ──
+    pdfBytes   = null;
+    pdfDocJS   = null;
+    pageNum    = 1;
+
+    // Clear PDF canvas
+    const canv = document.getElementById("pdfCanvas");
+    if (canv) {
+        const ctx2 = canv.getContext("2d");
+        ctx2.clearRect(0, 0, canv.width, canv.height);
+        canv.width  = 0;
+        canv.height = 0;
+    }
+
+    // Reset file input so same file can be re-chosen next login
+    const pdfInput = document.getElementById("pdfUpload");
+    if (pdfInput) pdfInput.value = "";
+
+    // Hide signature drag box
+    const dragSig = document.getElementById("dragSigContainer");
+    if (dragSig) dragSig.style.display = "none";
+
+    // Reset page counter display
+    const pgNum   = document.getElementById("pgNum");
+    const pgTotal = document.getElementById("pgTotal");
+    if (pgNum)   pgNum.innerText   = "1";
+    if (pgTotal) pgTotal.innerText = "1";
+
+    document.getElementById("mainApp").style.display      = "none";
+    document.getElementById("loginOverlay").style.display = "flex";
+    document.getElementById("passInput").value = "";
+    hideError("loginError");
+}
+
+async function logoutSystem() {
+    const ok = await guConfirm("Are you sure you want to exit the current session?", 'confirm', 'Yes, Exit', 'Cancel');
+    if (ok) forceLogout();
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  SECURE MODAL
+// ═══════════════════════════════════════════════════════════════
+function openSecurePrompt(title, desc, callback) {
+    const modal = document.getElementById("secureModal");
+    document.getElementById("modalTitle").innerText = title;
+    document.getElementById("modalDesc").innerText  = desc;
+    document.getElementById("modalInput").value     = "";
+    modal.style.display = "flex";
+    document.getElementById("modalInput").focus();
+    document.getElementById("modalConfirmBtn").onclick = () => {
+        const val = document.getElementById("modalInput").value;
+        closeModal();
+        callback(val);
+    };
+}
+function closeModal() {
+    document.getElementById("secureModal").style.display = "none";
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  SIGNATURE — Canvas drawing
+// ═══════════════════════════════════════════════════════════════
+const canvas = document.getElementById("sigCanvas");
+const ctx    = canvas.getContext("2d");
+let drawing  = false;
+ctx.lineWidth  = 2;
+ctx.lineCap    = "round";
+ctx.strokeStyle = "#000000";
+
+canvas.onmousedown  = (e) => { drawing = true; ctx.beginPath(); ctx.moveTo(e.offsetX, e.offsetY); };
+canvas.onmousemove  = (e) => { if (drawing) { ctx.lineTo(e.offsetX, e.offsetY); ctx.stroke(); } };
+window.onmouseup    = ()  => { drawing = false; };
+
+// Touch support
+canvas.ontouchstart = (e) => { e.preventDefault(); const t = e.touches[0]; const r = canvas.getBoundingClientRect(); drawing = true; ctx.beginPath(); ctx.moveTo(t.clientX - r.left, t.clientY - r.top); };
+canvas.ontouchmove  = (e) => { e.preventDefault(); if (!drawing) return; const t = e.touches[0]; const r = canvas.getBoundingClientRect(); ctx.lineTo(t.clientX - r.left, t.clientY - r.top); ctx.stroke(); };
+canvas.ontouchend   = ()  => { drawing = false; };
+
+function clearSig() { ctx.clearRect(0, 0, 300, 130); }
+
+async function savePermanentSig(dataUrl) {
+    const ok = await guConfirm("Register this as your internal authorization signature?\n\nThis will be permanently locked to your profile.", 'confirm', 'Yes, Register', 'Cancel');
+    if (ok) {
+        const sigKey = "sig_" + currentUser.empCode;
+        localStorage.setItem(sigKey, dataUrl);
+        currentUser.savedSig = dataUrl;
+        refreshSignatureUI();
+    }
+}
+
+async function lockAndSaveSig(type) {
+    if (type === "draw") {
+        const data = canvas.toDataURL();
+        if (data.length < 2000) { await guAlert("Signature appears empty. Please draw your signature first.", 'warning'); return; }
+        savePermanentSig(data);
+    }
+}
+
+function processUploadedSig(input) {
+    if (input.files && input.files[0]) {
+        const reader = new FileReader();
+        reader.onload = (e) => { savePermanentSig(e.target.result); };
+        reader.readAsDataURL(input.files[0]);
+    }
+}
+
+function refreshSignatureUI() {
+    const box          = document.getElementById("slots");
+    const creationZone = document.getElementById("sigCreationZone");
+    const adminZone    = document.getElementById("adminZone");
+
+    if (currentUser.savedSig) {
+        box.innerHTML = `
+            <div class="sig-item">
+                <img src="${currentUser.savedSig}" onclick="selectSig('${currentUser.savedSig}')">
+                <div class="lock-badge"><i class="fas fa-lock"></i> REGISTERED — Click to place on PDF</div>
+            </div>`;
+        creationZone.classList.add("hidden");
+        adminZone.classList.remove("hidden");
+    } else {
+        box.innerHTML = `<p style="font-size:0.8rem; color:#64748b;"><i class="fas fa-info-circle"></i> No signature registered yet. Draw or upload above.</p>`;
+        creationZone.classList.remove("hidden");
+        adminZone.classList.add("hidden");
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  ADMIN RESET SIGNATURE — verified via Google Sheet
+// ═══════════════════════════════════════════════════════════════
+async function adminResetSignature() {
+    openSecurePrompt(
+        "Admin Reset",
+        "Enter Admin Password to reset this signature:",
+        async (adminPass) => {
+            if (!adminPass) return;
+            const adminPassHash = await sha256(adminPass);
+
+            try {
+                const res = await callScript({
+                    action:        "adminResetSig",
+                    adminPassHash: adminPassHash
+                });
+
+                if (!res.ok) {
+                    await guAlert("Error: " + (res.msg || "Incorrect Admin Password."), 'danger');
+                    return;
+                }
+
+                // Clear signature from localStorage
+                const sigKey = "sig_" + currentUser.empCode;
+                localStorage.removeItem(sigKey);
+                currentUser.savedSig = null;
+                refreshSignatureUI();
+                await guAlert("Signature has been reset successfully.", 'success');
+
+            } catch (err) {
+                await guAlert("Network error. Please check connection.", 'danger');
+            }
+        }
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  PLACE SIGNATURE ON PDF
+// ═══════════════════════════════════════════════════════════════
+function selectSig(src) {
+    const container = document.getElementById("dragSigContainer");
+    document.getElementById("dragImg").src = src;
+    document.getElementById("metaText").innerHTML =
+        `Internally Authorized by: ${currentUser.name}<br>` +
+        `${currentUser.post}<br>` +
+        `Emp Code: ${currentUser.empCode}<br>` +
+        `Branch: ${currentUser.branch}<br>` +
+        `Date: ${new Date().toLocaleString()}`;
+    container.style.display = "block";
+    container.style.left    = "100px";
+    container.style.top     = "100px";
+}
+
+// Drag signature on PDF
+const dragBox = document.getElementById("dragSigContainer");
+dragBox.onmousedown = (e) => {
+    e.preventDefault();
+    const ox = e.clientX - dragBox.offsetLeft;
+    const oy = e.clientY - dragBox.offsetTop;
+    document.onmousemove = (m) => {
+        dragBox.style.left = (m.clientX - ox) + "px";
+        dragBox.style.top  = (m.clientY - oy) + "px";
+    };
+    document.onmouseup = () => { document.onmousemove = null; };
+};
+
+// ═══════════════════════════════════════════════════════════════
+//  PDF VIEWER
+// ═══════════════════════════════════════════════════════════════
+let pdfBytes, pdfDocJS, pageNum = 1;
+
+document.getElementById("pdfUpload").onchange = (e) => {
+    if (e.target.files[0]) {
+        const reader = new FileReader();
+        reader.onload = function() { pdfBytes = this.result; };
+        reader.readAsArrayBuffer(e.target.files[0]);
+    }
+};
+
+async function previewPDF() {
+    if (!pdfBytes) { await guAlert("Please select a PDF file first.", 'warning'); return; }
+    pdfDocJS = await pdfjsLib.getDocument({ data: pdfBytes }).promise;
+    document.getElementById("pgTotal").innerText = pdfDocJS.numPages;
+    pageNum = 1;
+    renderPage();
+}
+
+async function renderPage() {
+    const page     = await pdfDocJS.getPage(pageNum);
+    const viewport = page.getViewport({ scale: 1.5 });
+    const canv     = document.getElementById("pdfCanvas");
+    canv.width     = viewport.width;
+    canv.height    = viewport.height;
+    await page.render({ canvasContext: canv.getContext("2d"), viewport }).promise;
+    document.getElementById("pgNum").innerText = pageNum;
+}
+
+function changePage(v) {
+    if (!pdfDocJS) return;
+    const next = pageNum + v;
+    if (next >= 1 && next <= pdfDocJS.numPages) { pageNum = next; renderPage(); }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  DOWNLOAD SIGNED PDF
+// ═══════════════════════════════════════════════════════════════
+async function downloadPDF() {
+    if (!pdfBytes)              { await guAlert("Please load a PDF document first.", 'warning'); return; }
+    if (!currentUser.savedSig)  { await guAlert("Please register your signature first.", 'warning'); return; }
+
+    const sigDataUri = document.getElementById("dragImg").src;
+    if (!sigDataUri || sigDataUri === window.location.href) {
+        await guAlert("Please click your signature to place it on the document first.", 'warning');
+        return;
+    }
+
+    const { PDFDocument, rgb, StandardFonts } = PDFLib;
+    const pdfDoc = await PDFDocument.load(pdfBytes);
+    const font   = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+    const page   = pdfDoc.getPages()[pageNum - 1];
+
+    let sigImg;
+    try {
+        if (sigDataUri.includes("image/png")) {
+            sigImg = await pdfDoc.embedPng(sigDataUri);
+        } else {
+            sigImg = await pdfDoc.embedJpg(sigDataUri);
+        }
+    } catch (e) {
+        await guAlert("Signature image format not supported. Please use PNG or JPG.", 'danger');
+        return;
+    }
+
+    const canv    = document.getElementById("pdfCanvas");
+    const viewer  = document.getElementById("viewer");
+    const wrapper = document.getElementById("pdfWrapper");
+    const pW = page.getWidth();
+    const pH = page.getHeight();
+
+    // Get wrapper's position relative to the viewer (accounts for scroll and padding)
+    const wrapperRect = wrapper.getBoundingClientRect();
+    const viewerRect  = viewer.getBoundingClientRect();
+
+    // dragBox position is in viewport coords — convert to wrapper-relative coords
+    const dragRect = dragBox.getBoundingClientRect();
+    const boxLeftRelativeToWrapper  = dragRect.left  - wrapperRect.left;
+    const boxTopRelativeToWrapper   = dragRect.top   - wrapperRect.top;
+
+    // Scale from canvas display size to actual canvas pixels (CSS vs attribute size)
+    const scaleX = canv.width  / canv.offsetWidth;
+    const scaleY = canv.height / canv.offsetHeight;
+
+    const canvasX = boxLeftRelativeToWrapper  * scaleX;
+    const canvasY = boxTopRelativeToWrapper   * scaleY;
+
+    // Convert canvas pixels to PDF points
+    const x = (canvasX / canv.width)  * pW;
+    // PDF Y axis is inverted (0 = bottom), add 45 offset for signature height
+    const y = pH - ((canvasY / canv.height) * pH) - 45;
+
+    page.drawImage(sigImg, { x, y, width: 80, height: 35 });
+
+    const textConfig = { x, size: 6.5, font, color: rgb(0.1, 0.2, 0.5) };
+    page.drawText(`Internally Authorized by: ${currentUser.name}`,                          { ...textConfig, y: y - 10 });
+    page.drawText(`${currentUser.post}`,                                                { ...textConfig, y: y - 18 });
+    page.drawText(`Emp Code: ${currentUser.empCode} | Branch: ${currentUser.branch}`,  { ...textConfig, y: y - 26 });
+    page.drawText(`Date: ${new Date().toLocaleString()}`,                               { ...textConfig, y: y - 34 });
+
+    const pdfDataUri = await pdfDoc.save();
+    const fileName   = `Signed_${currentUser.branch}_${new Date().toISOString().slice(0,10)}.pdf`;
+    const blob       = new Blob([pdfDataUri], { type: "application/pdf" });
+    const url        = URL.createObjectURL(blob);
+    const link       = document.createElement("a");
+    link.href        = url;
+    link.download    = fileName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    showDownloadToast(fileName);
+}
+
+function showDownloadToast(fileName) {
+    const toast = document.getElementById('downloadToast');
+    document.getElementById('downloadToastMsg').textContent = 'PDF Saved: ' + fileName;
+    toast.classList.add('show');
+    clearTimeout(toast._t);
+    toast._t = setTimeout(() => toast.classList.remove('show'), 4500);
+}
+</script>
+</body>
+</html>
+
+
+
+
+
+
