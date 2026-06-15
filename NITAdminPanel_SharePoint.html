@@ -3497,30 +3497,6 @@ async function getListId(listName) {
 
 const SP_TITLE_LISTS = ["GU_Branches", "GU_BranchJourney", "GU_ManagerHist"];
 
-// GU_Branches: code name → internal SP field name (for WRITE)
-const SP_WRITE_MAP_BRANCHES = {
-    "Branch":             "Title",
-    "EmpID":              "field_1",
-    "EmpName":            "field_2",
-    "Post":               "field_3",
-    "AllowedIP":          "field_4",
-    "PassHash":           "field_5",
-    "ActKeyHash":         "field_6",
-    "ActKey":             "field_7",
-    "BranchEmail":        "field_8",
-    "WorkstationStatus":  "field_9",
-    "ManagerStatus":      "field_10",
-    "AppEmailSentAt":     "field_11",
-    "AuthRequestedAt":    "field_12",
-    "AuthorizedAt":       "field_13",
-    "PrimaryEmpID":       "field_14",
-    "SignatureRevoked":   "field_15",
-    "SignatureVersion":   "field_16",
-    "SignatureRevokedAt": "field_17",
-    "FirstLogin":         "field_18",
-    "Activated":          "field_19"
-};
-
 // GU_Settings uses standard Title column for SettingKey — no custom mapping needed
 const SP_WRITE_MAP_SETTINGS = {
     "SettingKey":   "Title",
@@ -3528,7 +3504,8 @@ const SP_WRITE_MAP_SETTINGS = {
 };
 
 // Dynamic write map cache — populated at runtime via /columns endpoint
-// for lists whose field numbers we can't hard-code (BranchJourney, ManagerHist)
+// All lists (including GU_Branches) use dynamic discovery to avoid
+// hardcoded field_N mismatches when columns were created in a different order.
 const _dynamicWriteMapCache = {};
 
 async function _fetchWriteMap(listName) {
@@ -3536,7 +3513,8 @@ async function _fetchWriteMap(listName) {
     const siteId = await getSiteId();
     const listId = await getListId(listName);
     const data = await graphRequest("GET", `/sites/${siteId}/lists/${listId}/columns`);
-    const map = { "Branch": "Title" };
+    // Start with the Title → Branch mapping for all title-based lists
+    const map = SP_TITLE_LISTS.includes(listName) ? { "Branch": "Title" } : {};
     for (const col of (data.value || [])) {
         if (col.displayName && col.name) {
             // Strip 🟡 prefix from Yes/No display names to match our code names
@@ -3549,9 +3527,9 @@ async function _fetchWriteMap(listName) {
 }
 
 async function _getWriteMap(listName) {
-    if (listName === "GU_Branches") return SP_WRITE_MAP_BRANCHES;
     if (listName === "GU_Settings") return SP_WRITE_MAP_SETTINGS;
-    // BranchJourney and ManagerHist — discover field numbers at runtime
+    // All other lists (GU_Branches, GU_BranchJourney, GU_ManagerHist) —
+    // discover actual internal field names at runtime to avoid field_N mismatch.
     return await _fetchWriteMap(listName);
 }
 
