@@ -3810,26 +3810,20 @@ async function callScript(payload) {
             return { ok: true, updated };
         }
 
-        // ── Send app email with DigitalSigner.html from OneDrive
+        // ── Send app email with link to the live GitHub Pages app (no attachment)
         case "sendAppEmail": {
             const { empId, branch, empName, post, ip, email } = payload;
-            // Fetch the HTML file bytes from OneDrive
-            // Fetch DigitalSigner HTML from OneDrive using file path (no Item ID needed)
-            const token = await getToken(MAIL_SCOPES);  // request Mail.Send + Files.Read only when sending
-            const encodedPath = encodeURIComponent(ONEDRIVE_FILE_PATH);
-            const fileRes = await fetch(`${GRAPH}/me/drive/root:/${encodedPath}:/content`, {
-                headers: { Authorization: `Bearer ${token}` }
-            });
-            if (!fileRes.ok) return { ok: false, msg: `Could not fetch DigitalSigner file from OneDrive path: "${ONEDRIVE_FILE_PATH}". Check the folder/file name is correct.` };
-            const fileBytes = await fileRes.arrayBuffer();
-            const base64File = btoa(String.fromCharCode(...new Uint8Array(fileBytes)));
+            const token = await getToken(MAIL_SCOPES);
+
+            // Link to the live DigitalSigner app on GitHub Pages — no file attachment needed
+            const APP_LINK = "https://aakashsontakke456-pixel.github.io/godavari-portal/DigitalSigner_SharePoint.html";
 
             const emailBody = {
                 message: {
-                    subject: `Godavari Urban — Internal Branch Authorization Tool — ${branch}`,
+                    subject: `Godavari Urban — Branch Authorization Tool — ${branch}`,
                     body: {
                         contentType: "HTML",
-                        content: `<div style="font-family:Arial,sans-serif;color:#1e293b;max-width:520px;">
+                        content: `<div style="font-family:Arial,sans-serif;color:#1e293b;max-width:540px;">
 <div style="background:#1e3a8a;color:#fff;padding:20px 24px;border-radius:8px 8px 0 0;">
   <strong style="font-size:1.1rem;">Godavari Urban Multi-State Credit Co-Op Society</strong><br>
   <span style="font-size:0.85rem;opacity:0.85;">Internal Branch Document Authorization Tool</span>
@@ -3838,38 +3832,46 @@ async function callScript(payload) {
   <p>Dear <strong>${empName}</strong>,</p>
   <p>Your workstation at <strong>${branch}</strong> branch has been registered on the
   Godavari Urban Internal Branch Document Authorization System.</p>
-  <p>The <strong>InternalBranchAuthorizationTool.html</strong> application is attached to this email.</p>
+
   <table style="background:#f1f5f9;border-radius:6px;padding:14px 18px;width:100%;border-collapse:collapse;margin:16px 0;">
     <tr><td style="padding:4px 0;color:#64748b;width:140px;">Employee ID</td><td style="padding:4px 0;font-weight:bold;">${empId}</td></tr>
     <tr><td style="padding:4px 0;color:#64748b;">Post</td><td style="padding:4px 0;">${post}</td></tr>
     <tr><td style="padding:4px 0;color:#64748b;">Branch</td><td style="padding:4px 0;">${branch}</td></tr>
     <tr><td style="padding:4px 0;color:#64748b;">IP Address</td><td style="padding:4px 0;font-family:monospace;font-weight:bold;">${ip}</td></tr>
   </table>
+
   <p><strong>How to Activate:</strong></p>
-  <ol style="line-height:1.9;">
-    <li>Save the attached <code>InternalBranchAuthorizationTool.html</code> on your PC</li>
-    <li>Open it in your browser</li>
+  <ol style="line-height:2;">
+    <li>Click the button below to open the Branch Authorization App</li>
     <li>Enter your Employee ID: <strong>${empId}</strong></li>
     <li>Wait on the pending screen — IT will authorize your workstation</li>
     <li>Click <em>Check IT Authorization</em> after IT confirms</li>
     <li>Set your personal security PIN / password</li>
   </ol>
-  <p style="color:#ef4444;font-size:0.85rem;">⚠️ Do NOT forward this email or share your password with anyone.
+
+  <div style="text-align:center;margin:24px 0;">
+    <a href="${APP_LINK}" target="_blank"
+       style="background:#1e3a8a;color:#ffffff;padding:14px 32px;border-radius:8px;
+              text-decoration:none;font-weight:700;font-size:1rem;display:inline-block;
+              letter-spacing:0.3px;">
+      🔐 Open Branch Authorization App
+    </a>
+  </div>
+
+  <p style="font-size:0.82rem;color:#64748b;text-align:center;">
+    Or copy this link: <a href="${APP_LINK}" style="color:#1e3a8a;">${APP_LINK}</a>
+  </p>
+
+  <p style="color:#ef4444;font-size:0.85rem;">⚠️ Do NOT share your password with anyone.
   IT will never ask for your password.</p>
   <hr style="border:none;border-top:1px solid #e2e8f0;margin:18px 0;">
   <p style="color:#64748b;font-size:0.8rem;">Godavari Urban IT Department &nbsp;|&nbsp; Contact IT for support.</p>
 </div></div>`
                     },
-                    toRecipients: [{ emailAddress: { address: email } }],
-                    attachments: [{
-                        "@odata.type": "#microsoft.graph.fileAttachment",
-                        name: "InternalBranchAuthorizationTool.html",
-                        contentType: "text/html",
-                        contentBytes: base64File
-                    }]
+                    toRecipients: [{ emailAddress: { address: email } }]
                 }
             };
-            // Use the token already fetched with MAIL_SCOPES (not graphRequest which re-fetches with basic scopes)
+            // Send via Graph API using the MAIL_SCOPES token directly
             const mailRes = await fetch(`${GRAPH}/me/sendMail`, {
                 method: "POST",
                 headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
