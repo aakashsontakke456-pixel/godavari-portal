@@ -474,11 +474,15 @@ const SHAREPOINT_SITE_NAME = "GUMCCSLFDCOMMISTION";                      // ✅ 
 const GRAPH         = "https://graph.microsoft.com/v1.0";
 const SP_SITE_PATH  = `/sites/${SHAREPOINT_HOST}:/sites/${SHAREPOINT_SITE_NAME}`;
 
-// ── MSAL configuration (silent background token — no login popup for branch users)
+// ── MSAL configuration
+// Branch app gets its OWN token via redirect — no dependency on IT Admin Panel.
+// On first visit: loginRedirect runs once (hidden, auto-consented via tenant admin).
+// After redirect: handleRedirectPromise() restores the token silently.
+// Branch users never see a Microsoft login screen (admin consent pre-grants access).
 const _msalConfig = {
     auth: {
-        clientId:   CLIENT_ID,
-        authority:  `https://login.microsoftonline.com/${TENANT_ID}`,
+        clientId:    CLIENT_ID,
+        authority:   `https://login.microsoftonline.com/${TENANT_ID}`,
         redirectUri: window.location.protocol === "file:"
             ? "http://localhost"
             : window.location.href.split("?")[0].split("#")[0]
@@ -486,14 +490,21 @@ const _msalConfig = {
     cache: { cacheLocation: "localStorage", storeAuthStateInCookie: true }
 };
 const _msalInstance = new msal.PublicClientApplication(_msalConfig);
-const _SP_SCOPES    = ["Sites.ReadWrite.All"];
+const _SP_SCOPES    = ["https://graph.microsoft.com/.default"];
 
-// ── CRITICAL: Initialize MSAL before any API call (required in MSAL v3+)
+// ── MSAL init + redirect handling
 let _msalReady = false;
 async function _ensureMsalReady() {
     if (_msalReady) return;
     await _msalInstance.initialize();
-    await _msalInstance.handleRedirectPromise().catch(() => {});
+    // Handle redirect response if we just came back from login
+    try {
+        const result = await _msalInstance.handleRedirectPromise();
+        if (result && result.accessToken) {
+            _spToken    = result.accessToken;
+            _spTokenExp = Date.now() + 3600000;
+        }
+    } catch(e) { console.warn("Redirect handle error:", e); }
     _msalReady = true;
 }
 
@@ -502,36 +513,52 @@ let _spSiteId   = null;
 let _spToken    = null;
 let _spTokenExp = 0;
 
-// ── Get SharePoint access token silently
+// ── Get SharePoint access token
+// Uses silent flow if account cached, otherwise triggers a redirect login.
+// The Azure app must have "Sites.ReadWrite.All" with ADMIN CONSENT granted —
+// so the redirect completes automatically without any user interaction.
 async function _getSpToken() {
     await _ensureMsalReady();
     const now = Date.now();
     if (_spToken && _spTokenExp > now + 60000) return _spToken;
+
     const accounts = _msalInstance.getAllAccounts();
     if (accounts.length > 0) {
         try {
-            const r = await _msalInstance.acquireTokenSilent({ scopes: _SP_SCOPES, account: accounts[0] });
+            const r = await _msalInstance.acquireTokenSilent({
+                scopes:  _SP_SCOPES,
+                account: accounts[0]
+            });
             _spToken    = r.accessToken;
             _spTokenExp = now + (r.expiresOn ? (r.expiresOn.getTime() - now) : 3600000);
             return _spToken;
-        } catch(e) { /* fall through to popup */ }
+        } catch(e) {
+            console.warn("Silent token failed, redirecting...", e);
+        }
     }
-    try {
-        const r = await _msalInstance.loginPopup({ scopes: _SP_SCOPES, prompt: "none" });
-        _spToken    = r.accessToken;
-        _spTokenExp = now + 3600000;
-        return _spToken;
-    } catch(e) {
-        const r = await _msalInstance.loginPopup({ scopes: _SP_SCOPES });
-        _spToken    = r.accessToken;
-        _spTokenExp = now + 3600000;
-        return _spToken;
-    }
+
+    // No account or silent failed — do redirect (returns after login, token picked up above)
+    // Store current state so we restore the UI after redirect
+    sessionStorage.setItem("gu_pre_redirect", "1");
+    await _msalInstance.loginRedirect({
+        scopes: _SP_SCOPES,
+        prompt: "none"   // "none" = silent SSO — fails gracefully if no SSO session
+    });
+    // Code below never runs (page redirects)
+    throw new Error("REDIRECTING");
 }
 
 // ── Generic Graph API call
 async function _graph(method, endpoint, body) {
-    const token = await _getSpToken();
+    let token;
+    try {
+        token = await _getSpToken();
+    } catch(e) {
+        if (e.message === "REDIRECTING") return; // page is redirecting, do nothing
+        console.error("Token error:", e);
+        await guAlert("Cannot connect to SharePoint.\n\nThis is a configuration issue — please contact IT Department.\n\nError: " + e.message, 'danger');
+        throw e;
+    }
     const opts = {
         method,
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }
@@ -1081,6 +1108,9 @@ function showIPBlockedError() {
 //  APP INIT — shows correct screen INSTANTLY, detects IP in background
 // ═══════════════════════════════════════════════════════════════
 async function initApp() {
+    // ── MSAL must initialize first on every page load (handles redirect return too)
+    await _ensureMsalReady();
+
     const activatedEmpId = localStorage.getItem("gu_activated_empId");
     const pendingStoredEmpId = localStorage.getItem("gu_pending_empId");
 
