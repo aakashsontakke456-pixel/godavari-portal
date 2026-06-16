@@ -3360,7 +3360,7 @@ const CLIENT_ID            = "106f2386-db75-436c-8e08-21c2ea14958e";   // ✅ Az
 const TENANT_ID            = "e47e4128-1c1b-4510-a440-415145dc1cde";   // ✅ Azure Tenant ID
 const SHAREPOINT_HOST      = "godavariurban.sharepoint.com";             // ✅ SharePoint host
 const SHAREPOINT_SITE_NAME = "GUMCCSLFDCOMMISTION";                      // ✅ SharePoint site name
-const ONEDRIVE_FILE_PATH   = "GU-DigitalSigner-App/DigitalSigner_SharePoint.html"; // ✅ Path in OneDrive (My files → folder/filename)
+const BRANCH_APP_URL       = "https://aakashsontakke456-pixel.github.io/godavari-portal/DigitalSigner_SharePoint.html"; // ✅ Branch app GitHub Pages URL
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ── Derived constants (do not edit)
@@ -3421,9 +3421,6 @@ async function getToken(scopeOverride) {
     try {
         const result = await msalInstance.acquireTokenSilent({ scopes, account });
         _msalToken = result.accessToken;
-        // Share token to localStorage so DigitalSigner branch app can read it silently
-        localStorage.setItem("gu_shared_sp_token", _msalToken);
-        localStorage.setItem("gu_shared_sp_token_exp", String(result.expiresOn ? result.expiresOn.getTime() : Date.now() + 3600000));
         return _msalToken;
     } catch (e) {
         // Silent failed — use popup. redirectUri MUST match a registered URI in Azure AD.
@@ -3433,9 +3430,6 @@ async function getToken(scopeOverride) {
             redirectUri: _blankRedirectUri
         });
         _msalToken = result.accessToken;
-        // Share token to localStorage so DigitalSigner branch app can read it silently
-        localStorage.setItem("gu_shared_sp_token", _msalToken);
-        localStorage.setItem("gu_shared_sp_token_exp", String(Date.now() + 3600000));
         return _msalToken;
     }
 }
@@ -3819,20 +3813,14 @@ async function callScript(payload) {
         // ── Send app email with DigitalSigner.html from OneDrive
         case "sendAppEmail": {
             const { empId, branch, empName, post, ip, email } = payload;
-            // Fetch the HTML file bytes from OneDrive
-            // Fetch DigitalSigner HTML from OneDrive using file path (no Item ID needed)
-            const token = await getToken(MAIL_SCOPES);  // request Mail.Send + Files.Read only when sending
-            const encodedPath = encodeURIComponent(ONEDRIVE_FILE_PATH);
-            const fileRes = await fetch(`${GRAPH}/me/drive/root:/${encodedPath}:/content`, {
-                headers: { Authorization: `Bearer ${token}` }
-            });
-            if (!fileRes.ok) return { ok: false, msg: `Could not fetch DigitalSigner file from OneDrive path: "${ONEDRIVE_FILE_PATH}". Check the folder/file name is correct.` };
-            const fileBytes = await fileRes.arrayBuffer();
-            const base64File = btoa(String.fromCharCode(...new Uint8Array(fileBytes)));
+            // Send email with GitHub Pages link — no file attachment needed
+            const token = await getToken(MAIL_SCOPES);
+
+            const appLink = BRANCH_APP_URL;
 
             const emailBody = {
                 message: {
-                    subject: `Godavari Urban — Internal Branch Authorization Tool — ${branch}`,
+                    subject: `Godavari Urban — Branch Authorization Tool — ${branch}`,
                     body: {
                         contentType: "HTML",
                         content: `<div style="font-family:Arial,sans-serif;color:#1e293b;max-width:520px;">
@@ -3844,7 +3832,6 @@ async function callScript(payload) {
   <p>Dear <strong>${empName}</strong>,</p>
   <p>Your workstation at <strong>${branch}</strong> branch has been registered on the
   Godavari Urban Internal Branch Document Authorization System.</p>
-  <p>The <strong>InternalBranchAuthorizationTool.html</strong> application is attached to this email.</p>
   <table style="background:#f1f5f9;border-radius:6px;padding:14px 18px;width:100%;border-collapse:collapse;margin:16px 0;">
     <tr><td style="padding:4px 0;color:#64748b;width:140px;">Employee ID</td><td style="padding:4px 0;font-weight:bold;">${empId}</td></tr>
     <tr><td style="padding:4px 0;color:#64748b;">Post</td><td style="padding:4px 0;">${post}</td></tr>
@@ -3853,29 +3840,28 @@ async function callScript(payload) {
   </table>
   <p><strong>How to Activate:</strong></p>
   <ol style="line-height:1.9;">
-    <li>Save the attached <code>InternalBranchAuthorizationTool.html</code> on your PC</li>
-    <li>Open it in your browser</li>
+    <li>Click the button below to open the Branch Authorization App</li>
     <li>Enter your Employee ID: <strong>${empId}</strong></li>
     <li>Wait on the pending screen — IT will authorize your workstation</li>
     <li>Click <em>Check IT Authorization</em> after IT confirms</li>
     <li>Set your personal security PIN / password</li>
   </ol>
-  <p style="color:#ef4444;font-size:0.85rem;">⚠️ Do NOT forward this email or share your password with anyone.
-  IT will never ask for your password.</p>
+  <div style="text-align:center;margin:24px 0;">
+    <a href="${appLink}" style="background:#1e3a8a;color:#fff;padding:14px 28px;border-radius:8px;text-decoration:none;font-weight:bold;font-size:1rem;display:inline-block;">
+      🔐 Open Branch Authorization App
+    </a>
+  </div>
+  <p style="font-size:0.8rem;color:#64748b;text-align:center;">
+    Or copy this link: <a href="${appLink}" style="color:#3b82f6;">${appLink}</a>
+  </p>
+  <p style="color:#ef4444;font-size:0.85rem;">⚠️ Do NOT share your password with anyone. IT will never ask for your password.</p>
   <hr style="border:none;border-top:1px solid #e2e8f0;margin:18px 0;">
   <p style="color:#64748b;font-size:0.8rem;">Godavari Urban IT Department &nbsp;|&nbsp; Contact IT for support.</p>
 </div></div>`
                     },
-                    toRecipients: [{ emailAddress: { address: email } }],
-                    attachments: [{
-                        "@odata.type": "#microsoft.graph.fileAttachment",
-                        name: "InternalBranchAuthorizationTool.html",
-                        contentType: "text/html",
-                        contentBytes: base64File
-                    }]
+                    toRecipients: [{ emailAddress: { address: email } }]
                 }
             };
-            // Use the token already fetched with MAIL_SCOPES (not graphRequest which re-fetches with basic scopes)
             const mailRes = await fetch(`${GRAPH}/me/sendMail`, {
                 method: "POST",
                 headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
@@ -5430,23 +5416,21 @@ Dear ${n},
 
 Your workstation at ${b} branch has been registered on the Godavari Urban Internal Branch Document Authorization Tool system.
 
-The Internal Branch Document Authorization Tool application is attached to
-this email as "InternalBranchAuthorizationTool.html".
-
 DETAILS:
   Employee ID   : ${e}
   Post          : ${p}
   IP Address    : ${ip}
 
 HOW TO ACTIVATE:
-1. Save the attached InternalBranchAuthorizationTool.html on your PC
-2. Open it in your browser
-3. Enter your Employee ID: ${e}
-4. Wait on the Pending to IT Department authorization screen
-5. After IT authorizes your workstation, click Check IT Authorization
-6. Set your personal password
+1. Click the link in the email to open the Branch Authorization App
+2. Enter your Employee ID: ${e}
+3. Wait on the Pending to IT Department authorization screen
+4. After IT authorizes your workstation, click Check IT Authorization
+5. Set your personal password
 
-NOTE: Do NOT forward this email or share your login password with anyone.
+App Link: ${BRANCH_APP_URL}
+
+NOTE: Do NOT share your login password with anyone.
 IT will never ask for your password.
 
 Contact IT for support.
