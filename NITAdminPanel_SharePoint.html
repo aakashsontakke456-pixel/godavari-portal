@@ -3555,6 +3555,14 @@ const SP_WRITE_MAP_MANAGERHIST = {
     // All other fields passed by display name (Timestamp, OldEmpID, Action, etc.)
 };
 
+// GU_Admins: Email is field_1, Password is field_2 (custom columns after Title)
+// Only used for reading — we never write to this list from the app.
+const SP_READ_MAP_ADMINS = {
+    "Title":   "AdminName",   // SP built-in — not used but mapped for safety
+    "field_1": "Email",
+    "field_2": "Password"
+};
+
 function _getWriteMap(listName) {
     if (listName === "GU_Settings")      return SP_WRITE_MAP_SETTINGS;
     if (listName === "GU_Branches")      return SP_WRITE_MAP_BRANCHES;
@@ -3581,20 +3589,46 @@ async function spFieldsToSP(listName, fields) {
     return mapped;
 }
 
-// READ: Graph $expand=fields returns display names which match our code names directly.
-// Only special case: Title → Branch for lists that store Branch as Title.
+// READ: Graph $expand=fields returns INTERNAL field names (field_1, field_2, ...)
+// for custom columns, NOT display names. We reverse-map them back to code names here.
+// Build reverse maps from the write maps (invert key↔value).
+const SP_READ_MAP_BRANCHES = Object.fromEntries(
+    Object.entries(SP_WRITE_MAP_BRANCHES).map(([code, sp]) => [sp, code])
+);
+const SP_READ_MAP_BRANCHJOURNEY = Object.fromEntries(
+    Object.entries(SP_WRITE_MAP_BRANCHJOURNEY).map(([code, sp]) => [sp, code])
+);
+const SP_READ_MAP_SETTINGS = Object.fromEntries(
+    Object.entries(SP_WRITE_MAP_SETTINGS).map(([code, sp]) => [sp, code])
+);
+
+function _getReadMap(listName) {
+    if (listName === "GU_Settings")      return SP_READ_MAP_SETTINGS;
+    if (listName === "GU_Branches")      return SP_READ_MAP_BRANCHES;
+    if (listName === "GU_BranchJourney") return SP_READ_MAP_BRANCHJOURNEY;
+    if (listName === "GU_Admins")        return SP_READ_MAP_ADMINS;
+    return {};
+}
+
 function spFieldsFromSP(listName, fields) {
-    const mapped = { ...fields };
+    // First, reverse-map internal SP field names (field_1, field_2...) → code names
+    const readMap = _getReadMap(listName);
+    const mapped = {};
+    for (const [spKey, val] of Object.entries(fields)) {
+        const codeKey = readMap[spKey] || spKey;
+        mapped[codeKey] = val;
+    }
+
+    // Title → Branch for lists that store Branch in the Title column
     if (SP_TITLE_LISTS.includes(listName) && mapped.hasOwnProperty("Title") && !mapped.hasOwnProperty("Branch")) {
         mapped.Branch = mapped.Title;
     }
-    // GU_BranchJourney stores Timestamp in the Title column (no dedicated
-    // Timestamp column exists on this list)
+    // GU_BranchJourney stores Timestamp in the Title column
     if (listName === "GU_BranchJourney" && mapped.hasOwnProperty("Title")) {
         mapped.Timestamp = mapped.Title;
         delete mapped.Title;
     }
-    // Strip 🟡 prefix from Yes/No display names so code can use clean names
+    // Strip 🟡 prefix from Yes/No display names (fallback in case SP returns them)
     const emojiFields = {
         "🟡 SignatureRevoked": "SignatureRevoked",
         "🟡 FirstLogin":       "FirstLogin",
@@ -3714,11 +3748,13 @@ async function callScript(payload) {
                 spReadAll("GU_ManagerHist"),
                 spReadAll("GU_BranchJourney")
             ]);
-            // Normalize boolean-like fields
+            // Normalize boolean-like fields (SP Yes/No returns true/false booleans OR "1"/"0" strings)
             branches.forEach(b => {
-                b.FirstLogin      = b.FirstLogin      === true || String(b.FirstLogin||"").toUpperCase()  === "TRUE";
-                b.Activated       = b.Activated       === true || String(b.Activated||"").toUpperCase()   === "TRUE";
-                b.SignatureRevoked = b.SignatureRevoked === true || String(b.SignatureRevoked||"").toUpperCase() === "TRUE";
+                const toB = v => v === true || v === 1 || String(v||"").toUpperCase() === "TRUE" || v === "1";
+                b.FirstLogin      = toB(b.FirstLogin);
+                b.Activated       = toB(b.Activated);
+                b.SignatureRevoked = toB(b.SignatureRevoked);
+                b.ActivationReset = toB(b.ActivationReset);
             });
             return { ok: true, branches, managerHistory: history, branchJourney: journey };
         }
@@ -3748,8 +3784,16 @@ async function callScript(payload) {
             const rows = payload.rows || [];
             let updated = 0;
             for (const row of rows) {
-                // Match by EmpID + Branch
-                const item = await spFindItem("GU_Branches", "EmpID", row._matchEmpID || row.EmpID);
+                // Match by EmpID first; if no EmpID (vacant branch), match by Branch name
+                let item = null;
+                const matchEmpID = String(row._matchEmpID || "").trim();
+                const matchBranch = String(row._matchBranch || row.Branch || "").trim();
+                if (matchEmpID) {
+                    item = await spFindItem("GU_Branches", "EmpID", matchEmpID);
+                }
+                if (!item && matchBranch) {
+                    item = await spFindItem("GU_Branches", "Branch", matchBranch);
+                }
                 if (!item) continue;
                 const fields = {};
                 ["Branch","EmpID","EmpName","Post","AllowedIP","BranchEmail",
@@ -3822,7 +3866,16 @@ async function callScript(payload) {
                     }]
                 }
             };
-            await graphRequest("POST", "/me/sendMail", emailBody);
+            // Use the token already fetched with MAIL_SCOPES (not graphRequest which re-fetches with basic scopes)
+            const mailRes = await fetch(`${GRAPH}/me/sendMail`, {
+                method: "POST",
+                headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+                body: JSON.stringify(emailBody)
+            });
+            if (!mailRes.ok && mailRes.status !== 204) {
+                const mailErr = await mailRes.json().catch(() => ({}));
+                throw new Error(mailErr?.error?.message || `Mail send failed: ${mailRes.status}`);
+            }
 
             // Update WorkstationStatus to FILE_SENT
             const branchItem = await spFindItem("GU_Branches", "EmpID", empId);
@@ -3940,11 +3993,14 @@ async function callScript(payload) {
 
         // ── Assign secondary branch (from vacant branch)
         case "assignSecondaryBranch": {
-            const { primaryEmpId, targetBranch, secondaryEmpId } = payload;
+            const { primaryEmpId, targetBranch } = payload;
             const primary = await spFindItem("GU_Branches", "EmpID", primaryEmpId);
             if (!primary) return { ok: false, msg: "Primary branch not found." };
             const target = await spFindItem("GU_Branches", "Branch", targetBranch);
             if (!target) return { ok: false, msg: "Target branch not found." };
+            // Generate secondaryEmpId here (same logic as the UI preview)
+            const branchCode = targetBranch.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 4) || "SCND";
+            const secondaryEmpId = primaryEmpId + "-" + branchCode;
             await spUpdateItem("GU_Branches", target._spId, {
                 EmpID: secondaryEmpId, EmpName: primary.EmpName, Post: primary.Post,
                 PrimaryEmpID: primaryEmpId, Activated: false, FirstLogin: true,
@@ -3954,7 +4010,7 @@ async function callScript(payload) {
             await logJourney(targetBranch, secondaryEmpId, primary.EmpName, primary.Post, target.AllowedIP,
                 "PENDING_FILE_SEND", "SECONDARY_ASSIGNED",
                 `Secondary branch assigned. Primary manager: ${primaryEmpId} (${primary.Branch}).`, "IT Admin");
-            return { ok: true };
+            return { ok: true, secondaryEmpId };
         }
 
         // ── Remove secondary branch assignment
@@ -4138,48 +4194,69 @@ function switchTab(name) {
 // ═══════════════════════════════════════════════════════════
 async function doAdminLogin() {
     const btn = document.getElementById("loginBtn");
+    const errEl = document.getElementById("loginErr");
+
     btn.disabled = true;
     btn.innerHTML = '<i class="fas fa-spinner spin"></i> &nbsp;Initializing...';
-    const errEl = document.getElementById("loginErr");
     errEl.style.display = "none";
 
     try {
-        // Step 0: Ensure MSAL is initialized (required in MSAL v3+)
+        // Step 0: Ensure MSAL is ready
         await ensureMsalReady();
 
-        // Step 1: MSAL sign-in with basic scopes only (no admin approval needed)
+        // Step 1: Always force a fresh login popup — never reuse a cached account.
+        // This ensures logout → login always prompts for account selection.
         btn.innerHTML = '<i class="fas fa-spinner spin"></i> &nbsp;Signing in to Microsoft 365...';
-        let account = msalInstance.getAllAccounts()[0];
-        if (!account) {
+        let account;
+        try {
             const result = await msalInstance.loginPopup({
                 scopes: LOGIN_SCOPES,
-                redirectUri: _blankRedirectUri  // popup closes cleanly — no localhost server needed
+                redirectUri: _blankRedirectUri,
+                prompt: "select_account"   // always show account picker — no silent reuse
             });
             account = result.account;
-        }
-        btn.innerHTML = '<i class="fas fa-spinner spin"></i> &nbsp;Checking admin access...';
-
-        // Step 2: Verify the signed-in Microsoft 365 account is an authorized admin
-        const email = (account.username || "").trim().toLowerCase();
-        const res = await callScript({ action: "adminResetSig", adminEmail: email });
-        if (!res.ok) {
-            errEl.innerText = "❌ " + (res.msg || "Access denied.");
+            msalInstance.setActiveAccount(account);
+        } catch(popupErr) {
+            // User closed the popup or cancelled — reset button cleanly
+            errEl.innerText = "Sign-in cancelled. Please try again.";
             errEl.style.display = "block";
             btn.disabled = false;
             btn.innerHTML = '<i class="fab fa-microsoft"></i> &nbsp;Sign in with Microsoft 365';
-            // Sign out so a different account can be tried next time
-            msalInstance.logoutPopup({ account }).catch(() => {});
             return;
         }
 
-        btn.innerHTML = '<i class="fas fa-check"></i> &nbsp;Authenticated!';
+        // Step 2: Verify this M365 account is an authorized IT admin
+        btn.innerHTML = '<i class="fas fa-spinner spin"></i> &nbsp;Checking admin access...';
+        const email = (account.username || "").trim().toLowerCase();
+        const res = await callScript({ action: "adminResetSig", adminEmail: email });
+        if (!res.ok) {
+            errEl.innerText = "❌ " + (res.msg || "Access denied. This account is not an authorized IT admin.");
+            errEl.style.display = "block";
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fab fa-microsoft"></i> &nbsp;Sign in with Microsoft 365';
+            // Sign out of MSAL so the account picker appears fresh on next attempt
+            try { await msalInstance.logoutPopup({ account, redirectUri: _blankRedirectUri }); } catch(e) {}
+            return;
+        }
+
+        // Step 3: Pre-cache Mail.Send token so email send never triggers a re-login popup
+        btn.innerHTML = '<i class="fas fa-spinner spin"></i> &nbsp;Preparing session...';
+        try {
+            await msalInstance.acquireTokenSilent({ scopes: MAIL_SCOPES, account });
+        } catch(e) {
+            try { await msalInstance.acquireTokenPopup({ scopes: MAIL_SCOPES, account, redirectUri: _blankRedirectUri }); }
+            catch(e2) { /* non-fatal — email send will handle it */ }
+        }
+
+        // Step 4: Store session and show the app
         sessionStorage.setItem("adminHash", email);
         sessionStorage.setItem("adminLoginTime", Date.now());
         sessionStorage.setItem("adminUser", account.name || account.username);
 
-        // Update header with M365 user info
         const userDisplay = document.getElementById("adminUserDisplay");
         if (userDisplay) userDisplay.innerText = account.name || account.username;
+
+        btn.innerHTML = '<i class="fas fa-check"></i> &nbsp;Authenticated!';
 
         document.getElementById("loginScreen").style.display = "none";
         document.getElementById("mainApp").style.display = "flex";
@@ -4191,6 +4268,7 @@ async function doAdminLogin() {
         applyBranchesResponse(dataRes);
         startAdminSessionTimer();
         startAutoRefresh();
+
     } catch(e) {
         errEl.innerText = "Error: " + (e.message || "Login failed. Check popup blockers.");
         errEl.style.display = "block";
@@ -4207,8 +4285,8 @@ let adminIdleTimer = null;
 function startAdminSessionTimer() {
     clearTimeout(adminIdleTimer);
     adminIdleTimer = setTimeout(() => {
-        alert("IT Admin session expired after 30 minutes of inactivity. Please login again.");
-        adminLogout();
+        toast("Session expired after 30 minutes of inactivity. Signing out...", "error");
+        setTimeout(() => adminLogout(), 2000);
     }, ADMIN_SESSION_TIMEOUT_MS);
     ["mousemove","keydown","click","scroll"].forEach(evt =>
         document.addEventListener(evt, resetAdminIdleTimer, { passive: true })
@@ -4219,22 +4297,54 @@ function resetAdminIdleTimer() {
     if (!sessionStorage.getItem("adminHash")) return;
     clearTimeout(adminIdleTimer);
     adminIdleTimer = setTimeout(() => {
-        alert("IT Admin session expired after 30 minutes of inactivity. Please login again.");
-        adminLogout();
+        toast("Session expired after 30 minutes of inactivity. Signing out...", "error");
+        setTimeout(() => adminLogout(), 2000);
     }, ADMIN_SESSION_TIMEOUT_MS);
 }
 
-function adminLogout() {
+async function adminLogout() {
     clearTimeout(adminIdleTimer);
     stopAutoRefresh();
+
+    // Show a "Signing out..." overlay so the user gets feedback immediately
+    const overlay = document.createElement("div");
+    overlay.id = "logoutOverlay";
+    overlay.style.cssText = `
+        position:fixed;inset:0;z-index:99999;
+        background:rgba(5,12,26,0.92);
+        display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;
+        color:#f1f5f9;font-family:'IBM Plex Sans',sans-serif;
+    `;
+    overlay.innerHTML = `
+        <div style="width:48px;height:48px;border:3px solid rgba(37,99,235,0.3);border-top-color:#2563eb;border-radius:50%;animation:rotating 0.8s linear infinite;"></div>
+        <div style="font-size:1.05rem;font-weight:600;color:#e2e8f0;">Signing out...</div>
+        <div style="font-size:0.78rem;color:#64748b;">Clearing Microsoft 365 session</div>
+    `;
+    document.body.appendChild(overlay);
+
+    // Clear our session storage first
     sessionStorage.removeItem("adminHash");
     sessionStorage.removeItem("adminLoginTime");
     sessionStorage.removeItem("adminUser");
-    // Sign out from Microsoft 365
-    const account = msalInstance.getAllAccounts()[0];
-    if (account) {
-        msalInstance.logoutPopup({ account }).catch(() => {});
+    _msalToken = null;
+
+    // Sign out from MSAL — clear ALL cached accounts so the next login always shows the account picker
+    try {
+        const accounts = msalInstance.getAllAccounts();
+        if (accounts.length > 0) {
+            // logoutPopup signs out the active account and clears MSAL token cache
+            await msalInstance.logoutPopup({
+                account: accounts[0],
+                redirectUri: _blankRedirectUri,
+                postLogoutRedirectUri: _blankRedirectUri
+            });
+        }
+    } catch(e) {
+        // Popup blocked or closed — clear cache manually and continue
+        try { msalInstance.clearCache(); } catch(e2) {}
     }
+
+    // Reload to the clean login screen
     location.reload();
 }
 
@@ -5716,7 +5826,7 @@ async function saveEditModal() {
         EmpName:    document.getElementById("em_empname").value.trim().toUpperCase(),
         Post:       document.getElementById("em_post").value.trim().toUpperCase(),
         AllowedIP:  document.getElementById("em_ip").value.trim().toUpperCase(),
-        BranchEmail:document.getElementById("em_email").value.trim().toUpperCase(),
+        BranchEmail:document.getElementById("em_email").value.trim().toLowerCase(),
         ActKeyHash: document.getElementById("em_acthash").value.trim(),
         FirstLogin: document.getElementById("em_firstlogin").value,
         Activated:  document.getElementById("em_activated").value,
