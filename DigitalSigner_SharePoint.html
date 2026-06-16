@@ -475,77 +475,64 @@ const GRAPH         = "https://graph.microsoft.com/v1.0";
 const SP_SITE_PATH  = `/sites/${SHAREPOINT_HOST}:/sites/${SHAREPOINT_SITE_NAME}`;
 
 // ── MSAL configuration
-// Branch app gets its OWN token via redirect — no dependency on IT Admin Panel.
-// On first visit: loginRedirect runs once (hidden, auto-consented via tenant admin).
-// After redirect: handleRedirectPromise() restores the token silently.
-// Branch users never see a Microsoft login screen (admin consent pre-grants access).
+// Branch app reads the shared token written by IT Admin Panel to localStorage.
+// Both apps are on the same GitHub Pages origin → same localStorage → token shared.
+// Branch users never need their own Microsoft account.
 const _msalConfig = {
     auth: {
-        clientId:    CLIENT_ID,
-        authority:   `https://login.microsoftonline.com/${TENANT_ID}`,
-        redirectUri: window.location.protocol === "file:"
-            ? "http://localhost"
-            : window.location.href.split("?")[0].split("#")[0]
+        clientId:   CLIENT_ID,
+        authority:  `https://login.microsoftonline.com/${TENANT_ID}`,
+        redirectUri: window.location.href.split("?")[0].split("#")[0]
     },
     cache: { cacheLocation: "localStorage", storeAuthStateInCookie: true }
 };
 const _msalInstance = new msal.PublicClientApplication(_msalConfig);
-const _SP_SCOPES    = ["https://graph.microsoft.com/.default"];
+const _SP_SCOPES = ["User.Read", "Sites.ReadWrite.All"];
 
-// ── MSAL init + redirect handling
 let _msalReady = false;
 async function _ensureMsalReady() {
     if (_msalReady) return;
     await _msalInstance.initialize();
-    // Handle redirect response if we just came back from login
-    try {
-        const result = await _msalInstance.handleRedirectPromise();
-        if (result && result.accessToken) {
-            _spToken    = result.accessToken;
-            _spTokenExp = Date.now() + 3600000;
-        }
-    } catch(e) { console.warn("Redirect handle error:", e); }
+    await _msalInstance.handleRedirectPromise().catch(() => {});
     _msalReady = true;
 }
 
-// ── Cache
 let _spSiteId   = null;
 let _spToken    = null;
 let _spTokenExp = 0;
 
-// ── Get SharePoint access token
-// Uses silent flow if account cached, otherwise triggers a redirect login.
-// The Azure app must have "Sites.ReadWrite.All" with ADMIN CONSENT granted —
-// so the redirect completes automatically without any user interaction.
+// ── Get SharePoint token
+// 1. In-memory cache
+// 2. Shared token written by IT Admin Panel ("gu_shared_sp_token" in localStorage)
+// 3. MSAL silent (if MSAL cache has IT admin account)
+// 4. Friendly error asking to contact IT
 async function _getSpToken() {
     await _ensureMsalReady();
     const now = Date.now();
+
     if (_spToken && _spTokenExp > now + 60000) return _spToken;
 
+    // Shared token from IT Admin Panel (written after IT login)
+    const sharedToken = localStorage.getItem("gu_shared_sp_token");
+    const sharedExp   = parseInt(localStorage.getItem("gu_shared_sp_token_exp") || "0", 10);
+    if (sharedToken && sharedExp > now + 60000) {
+        _spToken    = sharedToken;
+        _spTokenExp = sharedExp;
+        return _spToken;
+    }
+
+    // MSAL silent fallback
     const accounts = _msalInstance.getAllAccounts();
     if (accounts.length > 0) {
         try {
-            const r = await _msalInstance.acquireTokenSilent({
-                scopes:  _SP_SCOPES,
-                account: accounts[0]
-            });
+            const r = await _msalInstance.acquireTokenSilent({ scopes: _SP_SCOPES, account: accounts[0] });
             _spToken    = r.accessToken;
             _spTokenExp = now + (r.expiresOn ? (r.expiresOn.getTime() - now) : 3600000);
             return _spToken;
-        } catch(e) {
-            console.warn("Silent token failed, redirecting...", e);
-        }
+        } catch(e) { /* silent failed */ }
     }
 
-    // No account or silent failed — do redirect (returns after login, token picked up above)
-    // Store current state so we restore the UI after redirect
-    sessionStorage.setItem("gu_pre_redirect", "1");
-    await _msalInstance.loginRedirect({
-        scopes: _SP_SCOPES,
-        prompt: "none"   // "none" = silent SSO — fails gracefully if no SSO session
-    });
-    // Code below never runs (page redirects)
-    throw new Error("REDIRECTING");
+    throw new Error("IT_TOKEN_MISSING");
 }
 
 // ── Generic Graph API call
@@ -554,9 +541,14 @@ async function _graph(method, endpoint, body) {
     try {
         token = await _getSpToken();
     } catch(e) {
-        if (e.message === "REDIRECTING") return; // page is redirecting, do nothing
-        console.error("Token error:", e);
-        await guAlert("Cannot connect to SharePoint.\n\nThis is a configuration issue — please contact IT Department.\n\nError: " + e.message, 'danger');
+        if (e.message === "IT_TOKEN_MISSING") {
+            await guAlert(
+                "System not ready.\n\nThe IT Administrator must open the IT Admin Panel and log in on this machine first.\n\nPlease contact your IT Department.",
+                'danger'
+            );
+        } else {
+            await guAlert("Connection error: " + e.message + "\n\nPlease contact IT Department.", 'danger');
+        }
         throw e;
     }
     const opts = {
@@ -739,81 +731,138 @@ async function _logJourney(branch, empId, empName, post, ip, status, action, det
 async function callScript(payload) {
     switch (payload.action) {
 
-        // ── Step 1 of activation: verify Employee ID exists and IP matches
+        // ── Step 1: Verify Employee ID exists and IP matches
+        // Called when branch manager enters their Emp ID on first open.
+        // Checks: EmpID exists in GU_Branches → IP matches AllowedIP set by IT
+        // Then: updates WorkstationStatus to IT_AUTH_PENDING so Approve button appears in IT app
         case "verifyIdentity": {
             const { empId, ip } = payload;
+
+            // 1. Look up employee in SharePoint
             const item = await _spFind("GU_Branches", "EmpID", empId);
-            if (!item) return { ok: false, msg: "Employee ID not found. Please contact IT." };
-
-            const status = String(item.ManagerStatus || "").toUpperCase();
-            if (status === "BRANCH_CLOSED") {
-                return { ok: false, msg: "This branch is closed. Please contact IT." };
-            }
-            // IP check
-            const allowedIP = String(item.AllowedIP || "").trim().toUpperCase();
-            const detectedIP = String(ip || "").trim().toUpperCase();
-            if (allowedIP && detectedIP && allowedIP !== detectedIP) {
-                return { ok: false, msg: `Network IP mismatch. Expected: ${item.AllowedIP}. Detected: ${ip}.\nPlease connect from your registered branch network.` };
+            if (!item) {
+                return { ok: false, msg: "Employee ID not found.\nPlease check your Employee ID or contact IT Department." };
             }
 
-            // Mark as auth-requested if not already authorized
+            // 2. Check branch not closed
+            const managerStatus = String(item.ManagerStatus || "").toUpperCase();
+            if (managerStatus === "BRANCH_CLOSED") {
+                return { ok: false, msg: "This branch has been closed by IT Department.\nPlease contact IT for assistance." };
+            }
+
+            // 3. Strict IP verification — must match exactly what IT set
+            const allowedIP  = String(item.AllowedIP || "").trim();
+            const detectedIP = String(ip || "").trim();
+
+            if (!allowedIP) {
+                return { ok: false, msg: "No IP address has been assigned for this branch.\nPlease contact IT Department to assign your branch IP." };
+            }
+            if (!detectedIP) {
+                return { ok: false, msg: "Your network IP could not be detected.\nPlease ensure you are connected to your branch network." };
+            }
+            if (allowedIP.toUpperCase() !== detectedIP.toUpperCase()) {
+                return {
+                    ok: false,
+                    msg: `IP Address Mismatch.\n\nRegistered IP: ${allowedIP}\nDetected IP:   ${detectedIP}\n\nYou must be connected to your registered branch network.\nIf your IP has changed, contact IT Department.`
+                };
+            }
+
+            // 4. Both EmpID and IP verified — determine current workflow status
             const wsStatus = String(item.WorkstationStatus || "").toUpperCase();
-            if (wsStatus !== "AUTHORIZED" && wsStatus !== "FILE_SENT") {
-                // Already file sent — no change needed
-            } else if (wsStatus === "FILE_SENT") {
-                // Update to IT_AUTH_PENDING
-                await _spPatch("GU_Branches", item._id, {
-                    WorkstationStatus: "IT_AUTH_PENDING",
-                    AuthRequestedAt:   new Date().toISOString()
-                });
-                await _logJourney(item.Branch, empId, item.EmpName, item.Post, ip,
-                    "IT_AUTH_PENDING", "IDENTITY_VERIFIED",
-                    "Branch verified Employee ID and IP. Pending IT workstation authorization.");
+            const activated = item.Activated === true || String(item.Activated || "").toLowerCase() === "true";
+
+            // Already fully authorized — go straight to login
+            if (activated || wsStatus === "AUTHORIZED") {
+                return {
+                    ok: true,
+                    name:       item.EmpName  || empId,
+                    branch:     item.Branch   || "",
+                    post:       item.Post     || "",
+                    authorized: true
+                };
             }
 
-            const isAuthorized = wsStatus === "AUTHORIZED" ||
-                                 String(item.Activated || "").toString() === "true" ||
-                                 item.Activated === true;
+            // Already waiting for IT — don't re-patch, just show waiting screen
+            if (wsStatus === "IT_AUTH_PENDING") {
+                return {
+                    ok: true,
+                    name:       item.EmpName  || empId,
+                    branch:     item.Branch   || "",
+                    post:       item.Post     || "",
+                    authorized: false
+                };
+            }
+
+            // FILE_SENT or any other pre-auth state — update to IT_AUTH_PENDING
+            // This makes the Approve button appear in the IT Admin Panel
+            await _spPatch("GU_Branches", item._id, {
+                WorkstationStatus: "IT_AUTH_PENDING",
+                AuthRequestedAt:   new Date().toISOString()
+            });
+            await _logJourney(
+                item.Branch, empId, item.EmpName, item.Post, detectedIP,
+                "IT_AUTH_PENDING", "IDENTITY_VERIFIED",
+                `Branch manager verified: EmpID=${empId}, IP=${detectedIP} matched AllowedIP=${allowedIP}. Awaiting IT workstation authorization.`
+            );
+
             return {
                 ok: true,
-                name:       item.EmpName   || empId,
-                branch:     item.Branch    || "",
-                authorized: isAuthorized
+                name:       item.EmpName  || empId,
+                branch:     item.Branch   || "",
+                post:       item.Post     || "",
+                authorized: false
             };
         }
 
-        // ── Step 2 of activation: check if IT has authorized this workstation
+        // ── Step 2: Check if IT has approved the workstation
+        // Called when branch clicks "Check IT Authorization" button.
+        // Re-verifies IP (security: must still be on branch network) then checks approval status.
         case "completeWorkstationAuthorization": {
             const { empId, ip } = payload;
             const item = await _spFind("GU_Branches", "EmpID", empId);
-            if (!item) return { ok: false, msg: "Branch record not found." };
+            if (!item) return { ok: false, msg: "Branch record not found. Please contact IT." };
+
+            // Re-verify IP (security check — must still be on registered branch network)
+            const allowedIP  = String(item.AllowedIP || "").trim();
+            const detectedIP = String(ip || "").trim();
+            if (allowedIP && detectedIP && allowedIP.toUpperCase() !== detectedIP.toUpperCase()) {
+                return { ok: false, msg: `Network IP mismatch.\nRegistered: ${allowedIP} | Detected: ${detectedIP}\nPlease stay connected to your branch network.` };
+            }
 
             const wsStatus  = String(item.WorkstationStatus || "").toUpperCase();
-            const activated = item.Activated === true || String(item.Activated || "").toString() === "true";
+            const activated = item.Activated === true || String(item.Activated || "").toLowerCase() === "true";
 
             if (!activated && wsStatus !== "AUTHORIZED") {
-                return { ok: false, msg: "Pending IT Department authorization. Please wait for IT to authorize your workstation." };
+                return { ok: false, msg: "IT Department has not yet approved your workstation.\nPlease wait and try again, or contact IT." };
             }
-            // Mark locally as activated
-            return { ok: true, name: item.EmpName || empId };
+
+            return { ok: true, name: item.EmpName || empId, branch: item.Branch || "", post: item.Post || "" };
         }
 
-        // ── Login with Employee ID + Password Hash (Option A PIN login)
+        // ── Login: verify EmpID + IP + Password on every login
+        // For 100 branches: each login re-checks SharePoint so IT deactivations take effect immediately
         case "login": {
-            const { empId, passHash } = payload;
+            const { empId, passHash, ip } = payload;
             const item = await _spFind("GU_Branches", "EmpID", empId);
             if (!item) return { ok: false, clearLocal: true, msg: "Employee record not found. Please reactivate." };
 
-            const status   = String(item.ManagerStatus   || "").toUpperCase();
-            const wsStatus = String(item.WorkstationStatus || "").toUpperCase();
-            const activated = item.Activated === true || String(item.Activated || "").toString() === "true";
+            const status    = String(item.ManagerStatus    || "").toUpperCase();
+            const wsStatus  = String(item.WorkstationStatus || "").toUpperCase();
+            const activated = item.Activated === true || String(item.Activated || "").toLowerCase() === "true";
 
-            // Check if manager was deactivated by IT
+            // Check if branch was closed by IT
             if (status === "BRANCH_CLOSED") {
-                return { ok: false, clearLocal: true, msg: "This branch has been closed by IT." };
+                return { ok: false, clearLocal: true, msg: "This branch has been closed by IT Department." };
             }
+            // Check workstation still authorized
             if (!activated && wsStatus !== "AUTHORIZED") {
-                return { ok: false, clearLocal: true, msg: "This workstation is no longer authorized. Please re-activate." };
+                return { ok: false, clearLocal: true, msg: "This workstation authorization has been revoked by IT.\nPlease contact IT Department." };
+            }
+            // Re-verify IP on every login (prevents login from wrong network)
+            const allowedIP  = String(item.AllowedIP || "").trim();
+            const detectedIP = String(ip || "").trim();
+            if (allowedIP && detectedIP && allowedIP.toUpperCase() !== detectedIP.toUpperCase()) {
+                return { ok: false, clearLocal: false, msg: `Login blocked: IP mismatch.\nRegistered: ${allowedIP} | Detected: ${detectedIP}\nYou must be on your branch network to log in.` };
             }
 
             // First login — no password set yet
@@ -1108,9 +1157,6 @@ function showIPBlockedError() {
 //  APP INIT — shows correct screen INSTANTLY, detects IP in background
 // ═══════════════════════════════════════════════════════════════
 async function initApp() {
-    // ── MSAL must initialize first on every page load (handles redirect return too)
-    await _ensureMsalReady();
-
     const activatedEmpId = localStorage.getItem("gu_activated_empId");
     const pendingStoredEmpId = localStorage.getItem("gu_pending_empId");
 
@@ -1270,7 +1316,8 @@ async function handleLogin() {
         const res = await callScript({
             action:   "login",
             empId:    pendingEmpId,
-            passHash: passHash
+            passHash: passHash,
+            ip:       currentIP
         });
 
         if (!res.ok) {
