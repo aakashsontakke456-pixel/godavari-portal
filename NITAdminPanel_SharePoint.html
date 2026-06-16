@@ -3368,27 +3368,28 @@ const GRAPH = "https://graph.microsoft.com/v1.0";
 const SP_SITE_PATH = `/sites/${SHAREPOINT_HOST}:/sites/${SHAREPOINT_SITE_NAME}`;
 
 // ── MSAL Configuration
-// Use the admin panel's own URL as the popup redirect URI — it's already
-// registered in Azure AD (no separate redirect.html needed). MSAL detects the
-// auth response via handleRedirectPromise() on load and resolves automatically.
-const _blankRedirectUri = "https://aakashsontakke456-pixel.github.io/godavari-portal/NITAdminPanel_SharePoint.html";
+// For popup flows in MSAL v3, use the page's own URL as redirectUri.
+// The popup closes itself after auth — it never fully reloads the app.
+const _blankRedirectUri = "https://aakashsontakke456-pixel.github.io/godavari-portal/redirect.html";
 
 const msalConfig = {
     auth: {
         clientId: CLIENT_ID,
         authority: `https://login.microsoftonline.com/${TENANT_ID}`,
-        redirectUri: "http://localhost",
+        redirectUri: "https://aakashsontakke456-pixel.github.io/godavari-portal/redirect.html",
         navigateToLoginRequestUrl: false
     },
     cache: { cacheLocation: "sessionStorage", storeAuthStateInCookie: true },
     system: { allowNativeBroker: false }
 };
 const msalInstance = new msal.PublicClientApplication(msalConfig);
-// ── Scopes split by need:
-// LOGIN_SCOPES  → requested at login (no admin approval needed)
-// MAIL_SCOPES   → requested only when sending email (needs Mail.Send)
+// ── Scopes:
+// LOGIN_SCOPES → at login (User.Read + Sites.ReadWrite.All — no admin approval needed)
+// MAIL_SCOPES  → only when sending email (adds Mail.Send — already admin-consented in tenant)
+// NOTE: Files.Read.All REMOVED — it requires extra admin consent and is not needed.
+//       OneDrive files for the signed-in user are accessible via Sites.ReadWrite.All.
 const LOGIN_SCOPES = ["User.Read", "Sites.ReadWrite.All"];
-const MAIL_SCOPES  = ["User.Read", "Sites.ReadWrite.All", "Mail.Send", "Files.Read.All"];
+const MAIL_SCOPES  = ["User.Read", "Sites.ReadWrite.All", "Mail.Send"];
 const SCOPES = LOGIN_SCOPES; // default — login uses basic scopes only
 
 // ── CRITICAL: Initialize MSAL before any API call (required in MSAL v3+)
@@ -3416,14 +3417,16 @@ async function getToken(scopeOverride) {
     const scopes = scopeOverride || SCOPES;
     const accounts = msalInstance.getAllAccounts();
     if (accounts.length === 0) throw new Error("Not signed in to Microsoft 365.");
+    const account = msalInstance.getActiveAccount() || accounts[0];
     try {
-        const result = await msalInstance.acquireTokenSilent({ scopes, account: accounts[0] });
+        const result = await msalInstance.acquireTokenSilent({ scopes, account });
         _msalToken = result.accessToken;
         return _msalToken;
     } catch (e) {
-        // Silent failed — use popup with blob redirect so no localhost error
+        // Silent failed — use popup. redirectUri MUST match a registered URI in Azure AD.
         const result = await msalInstance.acquireTokenPopup({
             scopes,
+            account,
             redirectUri: _blankRedirectUri
         });
         _msalToken = result.accessToken;

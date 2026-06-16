@@ -1,41 +1,31 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Authenticating...</title>
-  <meta charset="utf-8" />
-  <style>
-    body { font-family: sans-serif; display: flex; align-items: center;
-           justify-content: center; height: 100vh; margin: 0;
-           background: #0f1923; color: #8899aa; }
-    p { font-size: 14px; letter-spacing: 1px; }
-  </style>
+  <meta charset="UTF-8">
+  <title>Redirecting...</title>
+  <!-- MSAL redirect handler — this page must be hosted at the registered redirectUri -->
+  <script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@3.28.0/lib/msal-browser.min.js"></script>
 </head>
 <body>
-  <p>Completing sign-in, please wait...</p>
-
-  <!-- MUST match the same MSAL version as the main app (v3.28.0) -->
-  <script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@3.28.0/lib/msal-browser.min.js"></script>
   <script>
+    // This blank page handles the OAuth2 popup redirect for MSAL v3.
+    // It reads the auth code/token from the URL and passes it back to the opener window.
     (async () => {
       try {
         const msalInstance = new msal.PublicClientApplication({
           auth: {
             clientId: "106f2386-db75-436c-8e08-21c2ea14958e",
             authority: "https://login.microsoftonline.com/e47e4128-1c1b-4510-a440-415145dc1cde",
-            redirectUri: "https://aakashsontakke456-pixel.github.io/godavari-portal/redirect.html"
+            redirectUri: window.location.href.split('?')[0].split('#')[0]
           },
           cache: { cacheLocation: "sessionStorage", storeAuthStateInCookie: true }
         });
         await msalInstance.initialize();
-        // This processes the auth code in the URL and stores the token,
-        // then MSAL automatically notifies the parent popup opener.
         await msalInstance.handleRedirectPromise();
-      } catch (e) {
-        console.error("MSAL redirect error:", e);
-      } finally {
-        // Always close — whether success or error
-        window.close();
+      } catch(e) {
+        // Errors are handled by the opener — just close if something goes wrong
       }
+      // The popup closes itself automatically after MSAL processes the response
     })();
   </script>
 </body>
