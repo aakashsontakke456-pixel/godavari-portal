@@ -579,7 +579,7 @@ async function _getListId(listName) {
 // Yes/No columns also carry "🟡 " prefix in their display names.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const _SP_TITLE_LISTS = ["GU_Branches", "GU_BranchJourney", "GU_ManagerHist"];
+const _SP_TITLE_LISTS = ["GU_Branches", "GU_BranchJourney", "GU_ManagerHist", "GU_Admins"];
 
 // GU_Branches confirmed write map (code name → internal SP field name)
 const _SP_WRITE_MAP_BRANCHES = {
@@ -611,6 +611,13 @@ const _SP_WRITE_MAP_SETTINGS = {
     "SettingValue": "field_1"
 };
 
+// GU_Admins: Title (name), Email is field_1, Password is field_2
+const _SP_WRITE_MAP_ADMINS = {
+    "Title":    "Title",
+    "Email":    "field_1",
+    "Password": "field_2"
+};
+
 // GU_BranchJourney confirmed write map
 // Fields: Branch(Title), Timestamp, EmpID, EmpName, Post, AllowedIP, Status, Action, Details, ChangedBy
 const _SP_WRITE_MAP_BRANCHJOURNEY = {
@@ -630,6 +637,7 @@ function _getWriteMap(listName) {
     if (listName === "GU_Branches")      return _SP_WRITE_MAP_BRANCHES;
     if (listName === "GU_Settings")      return _SP_WRITE_MAP_SETTINGS;
     if (listName === "GU_BranchJourney") return _SP_WRITE_MAP_BRANCHJOURNEY;
+    if (listName === "GU_Admins")        return _SP_WRITE_MAP_ADMINS;
     return {};
 }
 
@@ -673,7 +681,11 @@ function _spFieldName(listName, fieldName) {
 }
 
 // ── Read ALL items from a list (handles pagination)
-async function _spGetAll(listName) {
+// ── In-memory cache for list data (per session, per list)
+const _spDataCache = {};
+
+async function _spGetAll(listName, forceRefresh = false) {
+    if (!forceRefresh && _spDataCache[listName]) return _spDataCache[listName];
     const siteId = await _getSiteId();
     const listId = await _getListId(listName);
     let endpoint = `/sites/${siteId}/lists/${listId}/items?$expand=fields&$top=999`;
@@ -683,13 +695,20 @@ async function _spGetAll(listName) {
         items = items.concat((d.value || []).map(i => ({ _id: i.id, ..._spFromSP(listName, i.fields) })));
         endpoint = d["@odata.nextLink"] ? d["@odata.nextLink"].replace(GRAPH, "") : null;
     }
+    // Cache GU_Branches only (not BranchJourney — that grows constantly)
+    if (listName === "GU_Branches") _spDataCache[listName] = items;
     return items;
 }
 
-// ── Find a single item by field value (always client-side — avoids internal SP field name mismatch)
-async function _spFind(listName, fieldName, value) {
-    const all = await _spGetAll(listName);
+// ── Find a single item by field value (client-side — avoids internal SP field name mismatch)
+async function _spFind(listName, fieldName, value, forceRefresh = false) {
+    const all = await _spGetAll(listName, forceRefresh);
     return all.find(i => String(i[fieldName] ?? "").trim().toLowerCase() === String(value ?? "").trim().toLowerCase()) || null;
+}
+
+// ── Invalidate cache after any write to GU_Branches
+function _invalidateBranchCache() {
+    delete _spDataCache["GU_Branches"];
 }
 
 // ── Update a list item
@@ -697,6 +716,7 @@ async function _spPatch(listName, spId, fields) {
     const siteId = await _getSiteId();
     const listId = await _getListId(listName);
     await _graph("PATCH", `/sites/${siteId}/lists/${listId}/items/${spId}/fields`, await _spToSP(listName, fields));
+    if (listName === "GU_Branches") _invalidateBranchCache();
 }
 
 // ── Create a list item
@@ -704,6 +724,7 @@ async function _spPost(listName, fields) {
     const siteId = await _getSiteId();
     const listId = await _getListId(listName);
     const d = await _graph("POST", `/sites/${siteId}/lists/${listId}/items`, { fields: await _spToSP(listName, fields) });
+    if (listName === "GU_Branches") _invalidateBranchCache();
     return { _id: d.id, ..._spFromSP(listName, d.fields || {}) };
 }
 
@@ -1218,17 +1239,34 @@ async function completeMsLogin() {
         // Detect IP first
         if (!currentIP) await detectIP();
 
-        // Update IP display
+        // ── STRICT IP CHECK — must match before anything else
+        const allowedIP = String(item.AllowedIP || "").trim();
+        const detectedIP = String(currentIP || "").trim();
         const ipLine = document.getElementById("ipStatusLine");
-        if (ipLine) {
-            const allowedIP = item.AllowedIP || "";
-            const ipMatch = allowedIP && currentIP && currentIP.trim() === allowedIP.trim();
-            if (allowedIP) {
-                ipLine.innerHTML = ipMatch
-                    ? '<i class="fas fa-check-circle" style="color:#10b981"></i> <span style="color:#10b981">IP Matched: </span><span style="color:#fff">' + currentIP + '</span>'
-                    : '<i class="fas fa-exclamation-triangle" style="color:#f59e0b"></i> <span style="color:#f59e0b">IP: ' + (currentIP||"unknown") + ' | Registered: ' + allowedIP + '</span>';
-            }
+
+        if (!allowedIP) {
+            // No IP registered — block access
+            if (ipLine) ipLine.innerHTML = '<i class="fas fa-times-circle" style="color:#ef4444"></i> <span style="color:#ef4444">No registered IP found. Contact IT Department.</span>';
+            errEl.innerText = "Access Denied.\n\nNo network IP is registered for your branch.\n\nPlease contact IT Department.";
+            errEl.style.display = "block";
+            statusEl.innerText = "";
+            return;
         }
+
+        if (!detectedIP || detectedIP.toLowerCase() !== allowedIP.toLowerCase()) {
+            // IP mismatch — block completely, do NOT send email, do NOT show pending
+            if (ipLine) ipLine.innerHTML = '<i class="fas fa-times-circle" style="color:#ef4444"></i> <span style="color:#ef4444">IP Mismatch — Access Denied</span>';
+            errEl.innerHTML = "<b>Access Denied — Network IP Mismatch</b>\n\n" +
+                "Your current IP: <b>" + (detectedIP || "Could not detect") + "</b>\n" +
+                "Registered IP : <b>" + allowedIP + "</b>\n\n" +
+                "You must be connected to your registered branch network.\nPlease contact IT Department if this is an error.";
+            errEl.style.display = "block";
+            statusEl.innerText = "";
+            return;
+        }
+
+        // IP matched — update display
+        if (ipLine) ipLine.innerHTML = '<i class="fas fa-check-circle" style="color:#10b981"></i> <span style="color:#10b981">IP Matched: </span><span style="color:#fff">' + detectedIP + '</span>';
 
         // ── CASE 1: Already IT-authorized → launch app directly
         if (wsStatus === "AUTHORIZED") {
@@ -1276,7 +1314,12 @@ async function completeMsLogin() {
 
         // Send email to IT department
         try {
-            const itEmail = "cops-analytics@godavariurban.com";
+            // Read IT notification email from GU_Admins list
+            let itEmail = "cops-analytics@godavariurban.com"; // fallback default
+            try {
+                const admins = await _spGetAll("GU_Admins");
+                if (admins && admins.length > 0 && admins[0].Email) itEmail = admins[0].Email.trim();
+            } catch(e) { /* use fallback */ }
             const mailBody = `
                 <div style="font-family:Segoe UI,sans-serif;max-width:600px;margin:0 auto;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden;">
                   <div style="background:#1e3a8a;padding:24px;text-align:center;">
@@ -1394,8 +1437,8 @@ async function checkITAuthorizationNew() {
     if (statusEl) statusEl.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Checking IT authorization...';
 
     try {
-        // Re-fetch fresh data from SharePoint
-        const item = await _spFind("GU_Branches", "BranchEmail", _pendingEmail);
+        // Re-fetch fresh data from SharePoint (force refresh — don't use cache)
+        const item = await _spFind("GU_Branches", "BranchEmail", _pendingEmail, true);
         if (!item) throw new Error("Branch record not found.");
 
         const wsStatus = String(item.WorkstationStatus || "").toUpperCase();
