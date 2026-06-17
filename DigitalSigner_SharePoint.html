@@ -1258,9 +1258,8 @@ async function completeMsLogin() {
             // IP mismatch — block completely, do NOT send email, do NOT show pending
             if (ipLine) ipLine.innerHTML = '<i class="fas fa-times-circle" style="color:#ef4444"></i> <span style="color:#ef4444">IP Mismatch — Access Denied</span>';
             errEl.innerHTML = "<b>Access Denied — Network IP Mismatch</b>\n\n" +
-                "Your current IP: <b>" + (detectedIP || "Could not detect") + "</b>\n" +
-                "Registered IP : <b>" + allowedIP + "</b>\n\n" +
-                "You must be connected to your registered branch network.\nPlease contact IT Department if this is an error.";
+                "You must be connected to your registered branch network.\n" +
+                "Please contact IT Department if this is an error.";
             errEl.style.display = "block";
             statusEl.innerText = "";
             return;
@@ -1399,19 +1398,10 @@ function showWaitingForIT(item) {
             <h2 style="margin:0 0 4px;color:#fff;">Pending IT Authorization</h2>
             <p style="color:#94a3b8;font-size:0.85rem;margin:0 0 20px;">Your login details have been sent to the IT Department.</p>
 
-            <div style="background:#0f172a;border:1px solid #334155;border-radius:10px;padding:16px;text-align:left;margin-bottom:20px;font-size:0.83rem;font-family:monospace;">
-                <div style="color:#64748b;margin-bottom:8px;font-family:'Segoe UI',sans-serif;font-weight:600;">📋 Your Details Sent to IT</div>
-                <div style="color:#94a3b8;">Branch &nbsp;&nbsp;: <span style="color:#fff;">${item.Branch || "—"}</span></div>
-                <div style="color:#94a3b8;">Emp ID &nbsp;&nbsp;: <span style="color:#fff;">${item.EmpID || "—"}</span></div>
-                <div style="color:#94a3b8;">Emp Name : <span style="color:#fff;">${item.EmpName || "—"}</span></div>
-                <div style="color:#94a3b8;">Your IP &nbsp;: <span style="color:#10b981;">${currentIP || "Detecting..."}</span></div>
-                <div style="color:#94a3b8;">Reg. IP &nbsp;: <span style="color:#93c5fd;">${item.AllowedIP || "—"}</span></div>
-            </div>
-
-            <div style="background:#1e3a2a;border:1px solid #10b981;border-radius:8px;padding:12px 16px;margin-bottom:20px;color:#6ee7b7;font-size:0.83rem;text-align:left;">
-                <i class="fas fa-envelope" style="margin-right:6px;"></i>
+            <div style="background:#1e3a2a;border:1px solid #10b981;border-radius:8px;padding:16px 20px;margin-bottom:24px;color:#6ee7b7;font-size:0.88rem;text-align:left;">
+                <i class="fas fa-envelope" style="margin-right:8px;"></i>
                 Authorization request email sent to IT Department.<br>
-                <span style="color:#94a3b8;font-size:0.78rem;">IT will verify your details and approve your workstation in the Admin Panel.</span>
+                <span style="color:#94a3b8;font-size:0.8rem;margin-top:6px;display:block;">IT will verify your details and approve your workstation in the Admin Panel.</span>
             </div>
 
             <div id="itAuthStatus" style="color:#fbbf24;font-size:0.85rem;margin-bottom:16px;min-height:20px;"></div>
