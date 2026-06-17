@@ -192,6 +192,22 @@
             <div id="ipStatusLine" style="color:#fbbf24;"><i class="fas fa-spinner fa-spin"></i> Detecting your network IP...</div>
         </div>
 
+        <!-- Employee ID Field -->
+        <div style="margin-bottom:16px; text-align:left;">
+            <label style="color:#94a3b8; font-size:0.78rem; font-weight:600; display:block; margin-bottom:6px; letter-spacing:0.05em;">
+                <i class="fas fa-id-badge" style="color:#3b82f6; margin-right:6px;"></i>EMPLOYEE ID
+            </label>
+            <input id="loginEmpId" type="text" placeholder="e.g. GU-0570"
+                style="width:100%; padding:12px 14px; border-radius:8px; border:1px solid #334155;
+                background:#0f172a; color:#fff; font-size:0.95rem; font-family:monospace;
+                outline:none; letter-spacing:0.05em; box-sizing:border-box;"
+                onfocus="this.style.borderColor='#3b82f6'" onblur="this.style.borderColor='#334155'"
+                onkeydown="if(event.key==='Enter') document.getElementById('msSignInBtn').click()">
+            <div id="empIdError" style="color:#f87171; font-size:0.78rem; margin-top:6px; display:none;">
+                <i class="fas fa-exclamation-circle"></i> <span id="empIdErrorMsg"></span>
+            </div>
+        </div>
+
         <button id="msSignInBtn" onclick="startMsLogin()" style="
             width:100%; padding:14px; border-radius:10px; border:none; cursor:pointer;
             background:#fff; color:#1e293b; font-size:1rem; font-weight:600;
@@ -1106,6 +1122,21 @@ async function startMsLogin() {
     const btn = document.getElementById("msSignInBtn");
     const errEl = document.getElementById("signInError");
     const statusEl = document.getElementById("signInStatus");
+    const empIdInput = document.getElementById("loginEmpId");
+    const empIdError = document.getElementById("empIdError");
+    const empIdErrorMsg = document.getElementById("empIdErrorMsg");
+
+    // Validate Employee ID field
+    const enteredEmpId = empIdInput ? empIdInput.value.trim() : "";
+    if (!enteredEmpId) {
+        if (empIdError) { empIdErrorMsg.innerText = "Please enter your Employee ID before signing in."; empIdError.style.display = "block"; }
+        if (empIdInput) empIdInput.focus();
+        return;
+    }
+    if (empIdError) empIdError.style.display = "none";
+
+    // Store for verification after MS login
+    window._loginEnteredEmpId = enteredEmpId;
 
     errEl.style.display = "none";
     btn.disabled = true;
@@ -1137,17 +1168,16 @@ async function completeMsLogin() {
     const errEl    = document.getElementById("signInError");
 
     try {
-        // Get the signed-in user's email from MS Graph
         statusEl.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Verifying branch access...';
 
-        const meRes  = await fetch("https://graph.microsoft.com/v1.0/me?$select=displayName,mail,userPrincipalName",
+        const meRes = await fetch("https://graph.microsoft.com/v1.0/me?$select=displayName,mail,userPrincipalName",
             { headers: { Authorization: "Bearer " + await _getSpToken() } });
-        const me     = await meRes.json();
-        const email  = (me.mail || me.userPrincipalName || "").toLowerCase().trim();
+        const me    = await meRes.json();
+        const email = (me.mail || me.userPrincipalName || "").toLowerCase().trim();
 
         if (!email) throw new Error("Could not read your Microsoft 365 email address.");
 
-        // Find this user in GU_Branches by BranchEmail field
+        // Find this user in GU_Branches by BranchEmail
         const item = await _spFind("GU_Branches", "BranchEmail", email);
 
         if (!item) {
@@ -1157,37 +1187,38 @@ async function completeMsLogin() {
             return;
         }
 
-        // Check branch status
-        const status    = String(item.ManagerStatus   || "").toUpperCase();
-        const activated = item.Activated === true || String(item.Activated || "").toString() === "true"
-                          || status === "PENDING_ACTIVATION" || status === "PENDING_FILE_SEND";
+        // ── Verify Employee ID matches the one registered by IT
+        const enteredEmpId = (window._loginEnteredEmpId || "").trim().toUpperCase();
+        const registeredEmpId = String(item.EmpID || "").trim().toUpperCase();
+        if (!enteredEmpId || enteredEmpId !== registeredEmpId) {
+            errEl.innerText = "Access Denied.\n\nThe Employee ID you entered (" + (window._loginEnteredEmpId || "") + ") does not match the registered Employee ID for this branch account.\n\nPlease enter the correct Employee ID assigned by IT Department.";
+            errEl.style.display = "block";
+            statusEl.innerText = "";
+            // Reset MS login so they can try again
+            try {
+                const msalApp = await _getMsalInstance();
+                const accounts = msalApp.getAllAccounts();
+                if (accounts.length > 0) await msalApp.logoutPopup({ account: accounts[0] }).catch(() => {});
+            } catch(e) {}
+            const msBtn = document.getElementById("msSignInBtn");
+            if (msBtn) msBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 21 21"><rect x="1" y="1" width="9" height="9" fill="#f25022"/><rect x="11" y="1" width="9" height="9" fill="#7fba00"/><rect x="1" y="11" width="9" height="9" fill="#00a4ef"/><rect x="11" y="11" width="9" height="9" fill="#ffb900"/></svg> Sign in with Microsoft 365';
+            return;
+        }
 
-        if (status === "BRANCH_CLOSED") {
+        const mgrStatus = String(item.ManagerStatus || "").toUpperCase();
+        const wsStatus  = String(item.WorkstationStatus || "").toUpperCase();
+
+        if (mgrStatus === "BRANCH_CLOSED") {
             errEl.innerText = "Access Denied: This branch has been closed by IT.";
             errEl.style.display = "block";
             statusEl.innerText = "";
             return;
         }
 
-        if (!activated) {
-            errEl.innerText = "Access Denied: Your branch account is not yet activated.\n\nPlease contact IT Department.";
-            errEl.style.display = "block";
-            statusEl.innerText = "";
-            return;
-        }
-
-        // ✅ All checks passed — launch the app
-        pendingEmpId = item.EmpID || email;
-        currentUser = {
-            name:    item.EmpName  || me.displayName || email,
-            branch:  item.Branch   || "",
-            post:    item.Post     || "",
-            empCode: item.EmpID    || email
-        };
-
+        // Detect IP first
         if (!currentIP) await detectIP();
 
-        // Show IP vs AllowedIP match on login screen
+        // Update IP display
         const ipLine = document.getElementById("ipStatusLine");
         if (ipLine) {
             const allowedIP = item.AllowedIP || "";
@@ -1199,26 +1230,205 @@ async function completeMsLogin() {
             }
         }
 
-        // Load saved signature
-        const sigKey = "sig_" + currentUser.empCode;
-        if (item.SignatureRevoked === true || String(item.SignatureRevoked || "") === "true") {
-            localStorage.removeItem(sigKey);
+        // ── CASE 1: Already IT-authorized → launch app directly
+        if (wsStatus === "AUTHORIZED") {
+            pendingEmpId = item.EmpID || email;
+            currentUser = {
+                name:    item.EmpName || me.displayName || email,
+                branch:  item.Branch  || "",
+                post:    item.Post    || "",
+                empCode: item.EmpID   || email
+            };
+            const sigKey = "sig_" + currentUser.empCode;
+            if (item.SignatureRevoked === true || String(item.SignatureRevoked || "") === "true") {
+                localStorage.removeItem(sigKey);
+            }
+            currentUser.savedSig = localStorage.getItem(sigKey) || null;
+            try {
+                await _logJourney(item.Branch, item.EmpID, item.EmpName, item.Post, currentIP || "",
+                    "AUTHORIZED", "MS365_LOGIN", "Branch manager signed in via Microsoft 365.");
+            } catch(e) {}
+            document.getElementById("authOverlay").style.display = "none";
+            launchMainApp();
+            return;
         }
-        currentUser.savedSig = localStorage.getItem(sigKey) || null;
 
-        // Log the sign-in
+        // ── CASE 2: Already requested, waiting for IT → show pending screen
+        if (wsStatus === "IT_AUTH_PENDING") {
+            _pendingBranchItem = item;
+            _pendingEmail      = email;
+            _pendingMe         = me;
+            showWaitingForIT(item);
+            statusEl.innerText = "";
+            return;
+        }
+
+        // ── CASE 3: First login / FILE_SENT / PENDING → request IT authorization
+        statusEl.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Sending authorization request to IT...';
+
+        // Update SharePoint: set WorkstationStatus = IT_AUTH_PENDING
+        try {
+            await _spPatch("GU_Branches", item._id, {
+                WorkstationStatus: "IT_AUTH_PENDING",
+                AuthRequestedAt:   new Date().toISOString()
+            });
+        } catch(e) { console.warn("Could not update WorkstationStatus:", e); }
+
+        // Send email to IT department
+        try {
+            const itEmail = "cops-analytics@godavariurban.com";
+            const mailBody = `
+                <div style="font-family:Segoe UI,sans-serif;max-width:600px;margin:0 auto;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden;">
+                  <div style="background:#1e3a8a;padding:24px;text-align:center;">
+                    <h2 style="color:#fff;margin:0;">🏦 Godavari Urban</h2>
+                    <p style="color:#93c5fd;margin:4px 0 0;">Branch Workstation Authorization Request</p>
+                  </div>
+                  <div style="padding:28px;">
+                    <p style="font-size:1rem;color:#1e293b;">IT Department,</p>
+                    <p>A branch manager has logged in and is requesting workstation authorization:</p>
+                    <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+                      <tr style="background:#f8fafc;"><td style="padding:10px 14px;font-weight:600;color:#64748b;width:40%;">Branch</td><td style="padding:10px 14px;color:#1e293b;">${item.Branch || "—"}</td></tr>
+                      <tr><td style="padding:10px 14px;font-weight:600;color:#64748b;">Employee ID</td><td style="padding:10px 14px;color:#1e293b;">${item.EmpID || "—"}</td></tr>
+                      <tr style="background:#f8fafc;"><td style="padding:10px 14px;font-weight:600;color:#64748b;">Employee Name</td><td style="padding:10px 14px;color:#1e293b;">${item.EmpName || "—"}</td></tr>
+                      <tr><td style="padding:10px 14px;font-weight:600;color:#64748b;">M365 Email</td><td style="padding:10px 14px;color:#1e293b;">${email}</td></tr>
+                      <tr style="background:#f8fafc;"><td style="padding:10px 14px;font-weight:600;color:#64748b;">Detected IP</td><td style="padding:10px 14px;color:#1e293b;">${currentIP || "Unknown"}</td></tr>
+                      <tr><td style="padding:10px 14px;font-weight:600;color:#64748b;">Registered IP</td><td style="padding:10px 14px;color:#1e293b;">${item.AllowedIP || "—"}</td></tr>
+                      <tr style="background:#f8fafc;"><td style="padding:10px 14px;font-weight:600;color:#64748b;">Requested At</td><td style="padding:10px 14px;color:#1e293b;">${new Date().toLocaleString("en-IN")}</td></tr>
+                    </table>
+                    <p style="background:#fef3c7;border-left:4px solid #f59e0b;padding:12px 16px;border-radius:4px;color:#92400e;">
+                      ⚠️ Please verify the details above and authorize the workstation from the <strong>IT Admin Panel → GU_Branches</strong>.
+                    </p>
+                  </div>
+                  <div style="background:#f8fafc;padding:16px;text-align:center;color:#94a3b8;font-size:0.8rem;">
+                    Godavari Urban Multi-State Credit Co-Op Society Ltd. — Internal Branch Document Authorization Tool
+                  </div>
+                </div>`;
+
+            await fetch(`${GRAPH}/me/sendMail`, {
+                method: "POST",
+                headers: {
+                    Authorization: "Bearer " + await _getSpToken(),
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    message: {
+                        subject: `[Branch Auth Request] ${item.Branch} — ${item.EmpName} (${item.EmpID})`,
+                        body: { contentType: "HTML", content: mailBody },
+                        toRecipients: [{ emailAddress: { address: itEmail } }]
+                    },
+                    saveToSentItems: false
+                })
+            });
+        } catch(e) { console.warn("IT notification email failed:", e); }
+
+        // Log the auth request
         try {
             await _logJourney(item.Branch, item.EmpID, item.EmpName, item.Post, currentIP || "",
-                "AUTHORIZED", "MS365_LOGIN", "Branch manager signed in via Microsoft 365.");
-        } catch(e) { /* non-fatal */ }
+                "IT_AUTH_PENDING", "AUTH_REQUESTED", "Branch manager logged in. Workstation authorization request sent to IT.");
+        } catch(e) {}
 
-        document.getElementById("authOverlay").style.display = "none";
-        launchMainApp();
+        _pendingBranchItem = item;
+        _pendingEmail      = email;
+        _pendingMe         = me;
+        showWaitingForIT(item);
+        statusEl.innerText = "";
 
     } catch (e) {
         errEl.innerText = "Error: " + (e.message || String(e));
         errEl.style.display = "block";
         statusEl.innerText = "";
+    }
+}
+
+// Pending variables for waiting screen
+let _pendingBranchItem = null;
+let _pendingEmail      = null;
+let _pendingMe         = null;
+
+// Show the "Waiting for IT" screen inside auth overlay
+function showWaitingForIT(item) {
+    const box = document.querySelector("#authOverlay .auth-box") || document.querySelector("#authOverlay > div");
+    if (!box) return;
+    box.innerHTML = `
+        <div style="text-align:center;">
+            <div style="width:72px;height:72px;background:#fef3c7;border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 16px;font-size:2rem;">⏳</div>
+            <h2 style="margin:0 0 4px;color:#fff;">Pending IT Authorization</h2>
+            <p style="color:#94a3b8;font-size:0.85rem;margin:0 0 20px;">Your login details have been sent to the IT Department.</p>
+
+            <div style="background:#0f172a;border:1px solid #334155;border-radius:10px;padding:16px;text-align:left;margin-bottom:20px;font-size:0.83rem;font-family:monospace;">
+                <div style="color:#64748b;margin-bottom:8px;font-family:'Segoe UI',sans-serif;font-weight:600;">📋 Your Details Sent to IT</div>
+                <div style="color:#94a3b8;">Branch &nbsp;&nbsp;: <span style="color:#fff;">${item.Branch || "—"}</span></div>
+                <div style="color:#94a3b8;">Emp ID &nbsp;&nbsp;: <span style="color:#fff;">${item.EmpID || "—"}</span></div>
+                <div style="color:#94a3b8;">Emp Name : <span style="color:#fff;">${item.EmpName || "—"}</span></div>
+                <div style="color:#94a3b8;">Your IP &nbsp;: <span style="color:#10b981;">${currentIP || "Detecting..."}</span></div>
+                <div style="color:#94a3b8;">Reg. IP &nbsp;: <span style="color:#93c5fd;">${item.AllowedIP || "—"}</span></div>
+            </div>
+
+            <div style="background:#1e3a2a;border:1px solid #10b981;border-radius:8px;padding:12px 16px;margin-bottom:20px;color:#6ee7b7;font-size:0.83rem;text-align:left;">
+                <i class="fas fa-envelope" style="margin-right:6px;"></i>
+                Authorization request email sent to IT Department.<br>
+                <span style="color:#94a3b8;font-size:0.78rem;">IT will verify your details and approve your workstation in the Admin Panel.</span>
+            </div>
+
+            <div id="itAuthStatus" style="color:#fbbf24;font-size:0.85rem;margin-bottom:16px;min-height:20px;"></div>
+
+            <button onclick="checkITAuthorizationNew()" id="checkAuthBtnNew"
+                style="width:100%;padding:14px;border-radius:10px;border:none;cursor:pointer;
+                background:#1e3a8a;color:white;font-size:1rem;font-weight:600;
+                display:flex;align-items:center;justify-content:center;gap:10px;transition:background 0.2s;"
+                onmouseover="this.style.background='#172554'" onmouseout="this.style.background='#1e3a8a'">
+                <i class="fas fa-sync-alt"></i> Check IT Authorization
+            </button>
+            <p style="color:#475569;font-size:0.75rem;margin-top:16px;line-height:1.6;">
+                Click the button above after IT Department approves your workstation.<br>
+                <i class="fas fa-lock" style="color:#3b82f6;"></i> Secure — no passwords stored in this app.
+            </p>
+        </div>`;
+}
+
+// Check if IT has authorized this workstation
+async function checkITAuthorizationNew() {
+    const btn      = document.getElementById("checkAuthBtnNew");
+    const statusEl = document.getElementById("itAuthStatus");
+    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Checking...'; }
+    if (statusEl) statusEl.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Checking IT authorization...';
+
+    try {
+        // Re-fetch fresh data from SharePoint
+        const item = await _spFind("GU_Branches", "BranchEmail", _pendingEmail);
+        if (!item) throw new Error("Branch record not found.");
+
+        const wsStatus = String(item.WorkstationStatus || "").toUpperCase();
+
+        if (wsStatus === "AUTHORIZED") {
+            if (statusEl) statusEl.innerHTML = '<i class="fas fa-check-circle" style="color:#10b981"></i> <span style="color:#10b981">IT has authorized your workstation!</span>';
+            await new Promise(r => setTimeout(r, 1000));
+
+            pendingEmpId = item.EmpID || _pendingEmail;
+            currentUser = {
+                name:    item.EmpName || (_pendingMe && _pendingMe.displayName) || _pendingEmail,
+                branch:  item.Branch  || "",
+                post:    item.Post    || "",
+                empCode: item.EmpID   || _pendingEmail
+            };
+            const sigKey = "sig_" + currentUser.empCode;
+            if (item.SignatureRevoked === true || String(item.SignatureRevoked || "") === "true") {
+                localStorage.removeItem(sigKey);
+            }
+            currentUser.savedSig = localStorage.getItem(sigKey) || null;
+            try {
+                await _logJourney(item.Branch, item.EmpID, item.EmpName, item.Post, currentIP || "",
+                    "AUTHORIZED", "WORKSTATION_APPROVED", "IT authorized the workstation. App launched.");
+            } catch(e) {}
+            document.getElementById("authOverlay").style.display = "none";
+            launchMainApp();
+        } else {
+            if (statusEl) statusEl.innerHTML = '<i class="fas fa-clock" style="color:#fbbf24"></i> <span style="color:#fbbf24">Still pending — IT has not approved yet. Please wait and try again.</span>';
+            if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-sync-alt"></i> Check IT Authorization'; }
+        }
+    } catch(e) {
+        if (statusEl) statusEl.innerText = "Error: " + (e.message || String(e));
+        if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-sync-alt"></i> Check IT Authorization'; }
     }
 }
 
