@@ -1396,6 +1396,13 @@ async function completeMsLogin() {
         const mgrStatus = String(item.ManagerStatus || "").toUpperCase();
         const wsStatus  = String(item.WorkstationStatus || "").toUpperCase();
 
+        // If IT reset this branch back to a pre-authorization state (Transfer Manager,
+        // Manager Changed/Deactivate, branch closed, etc.) drop any stale local
+        // "Password mode" flag so the next attempt correctly shows Employee ID again.
+        if (wsStatus !== "AUTHORIZED" && isPasswordModeActive()) {
+            clearPasswordModeActive();
+        }
+
         if (mgrStatus === "BRANCH_CLOSED") {
             errEl.innerText = "Access Denied: This branch has been closed by IT.";
             errEl.style.display = "block";
