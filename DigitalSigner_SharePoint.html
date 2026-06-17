@@ -627,7 +627,7 @@ async function _spToSP(listName, fields) {
     return mapped;
 }
 
-// Convert incoming fields (SP display names → code names) for GET reads
+// Convert incoming fields (SP internal field_N names → code names) for GET reads
 function _spFromSP(listName, fields) {
     const mapped = { ...fields };
     // Title → Branch
@@ -639,6 +639,14 @@ function _spFromSP(listName, fields) {
         if (key.startsWith("🟡 ")) {
             mapped[key.replace(/^🟡\s*/, "")] = mapped[key];
             delete mapped[key];
+        }
+    }
+    // Reverse map: internal SP field names (field_N) → code names
+    const writeMap = _getWriteMap(listName);
+    const reverseMap = Object.fromEntries(Object.entries(writeMap).map(([k,v]) => [v, k]));
+    for (const [spKey, codeKey] of Object.entries(reverseMap)) {
+        if (mapped.hasOwnProperty(spKey) && !mapped.hasOwnProperty(codeKey)) {
+            mapped[codeKey] = mapped[spKey];
         }
     }
     return mapped;
