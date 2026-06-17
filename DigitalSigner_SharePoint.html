@@ -672,15 +672,11 @@ const _SP_WRITE_MAP_BRANCHJOURNEY = {
 // SHA-256 fingerprint of the FINAL signed PDF — if the file is changed in any way
 // after signing (including pasting the signature onto a different document or
 // editing the date), this hash will no longer match what's stored here.
+// NOTE: unlike GU_Branches/GU_BranchJourney, this list was created by typing the
+// column names directly, so SharePoint kept the real names internally (no field_N
+// renaming) — only the built-in Title column needs a code-name mapping.
 const _SP_WRITE_MAP_SIGNEDDOCS = {
-    "EventID":  "Title",
-    "Branch":   "field_1",
-    "EmpID":    "field_2",
-    "EmpName":  "field_3",
-    "Post":     "field_4",
-    "DocHash":  "field_5",
-    "SignedAt": "field_6",
-    "FileName": "field_7"
+    "EventID": "Title"
 };
 
 function _getWriteMap(listName) {

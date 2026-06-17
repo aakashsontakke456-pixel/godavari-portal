@@ -3599,15 +3599,9 @@ const SP_READ_MAP_ADMINS = {
 // GU_SignedDocs: created by the branch Digital Signer tool every time a document
 // is signed. EventID is stored in Title; we only ever READ this list here, to
 // verify documents — never write to it from the admin panel.
-const SP_READ_MAP_SIGNEDDOCS = {
-    "field_1": "Branch",
-    "field_2": "EmpID",
-    "field_3": "EmpName",
-    "field_4": "Post",
-    "field_5": "DocHash",
-    "field_6": "SignedAt",
-    "field_7": "FileName"
-};
+// NOTE: this list keeps its real column names internally (no field_N renaming),
+// so no mapping is needed here — only Title→EventID, handled separately below.
+const SP_READ_MAP_SIGNEDDOCS = {};
 
 function _getWriteMap(listName) {
     if (listName === "GU_Settings")      return SP_WRITE_MAP_SETTINGS;
