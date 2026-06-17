@@ -173,72 +173,43 @@
 <body onload="initApp()" onmousemove="resetIdleTimer()" onkeydown="resetIdleTimer()" onclick="resetIdleTimer()">
 
 <!-- ══════════════════════════════════════════
-     STEP 1: BRANCH AUTHORIZATION OVERLAY
-     Shown on first open (workstation not activated)
+     SIGN-IN OVERLAY  (Microsoft 365 Login)
 ═══════════════════════════════════════════ -->
-<div id="authOverlay" style="display:none;">
-    <div class="auth-box">
+<div id="authOverlay" style="display:flex; position:fixed; inset:0; background:linear-gradient(135deg,#0f172a 0%,#1e3a8a 100%); justify-content:center; align-items:center; z-index:20000;">
+    <div class="auth-box" style="text-align:center; max-width:440px; width:90%;">
         <img src="data:image/jpeg;base64,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" style="width:72px;height:72px;object-fit:contain;margin-bottom:16px;filter:drop-shadow(0 4px 12px rgba(59,130,246,0.4));">
-        <h2 style="margin:0 0 5px 0;">Branch Authorization</h2>
-        <p style="color:#94a3b8; font-size:0.85rem; margin:0 0 15px 0;">Godavari Urban Multi-State Credit Co-Op Society</p>
-        <span id="ipLabel">Detecting Network IP...</span>
-
-        <!-- Step 1: Enter Emp ID -->
-        <div id="authStep1">
-            <p style="color:#94a3b8; font-size:0.9rem; margin-bottom:20px;">Enter your Employee ID to start branch activation</p>
-            <input type="text" id="empIdAuth" placeholder="Enter Employee ID  (e.g. GU-0570)" autocomplete="off">
-            <button class="btn btn-primary" style="margin-top:10px;" onclick="verifyIdentity()">
-                <i class="fas fa-user-check"></i> Verify Employee ID
-            </button>
-            <div id="authLoader" class="loader-text">
-                <i class="fas fa-spinner fa-spin"></i> Communicating with server...
-            </div>
-            <div id="authError" style="color:#f87171; font-size:0.85rem; margin-top:10px; display:none; white-space:pre-line; line-height:1.5;"></div>
-        </div>
-
-        <!-- Step 2: Wait for IT authorization -->
-        <div id="authStep2" class="hidden">
-            <div id="reqIdBox">
-                <small style="color:#64748b; font-weight:bold;">PENDING TO IT DEPARTMENT FOR AUTHORIZATION</small>
-                <div id="displayReqId" style="color:var(--success); font-family:monospace; font-size:1.4rem; font-weight:bold; margin-top:5px;"></div>
-            </div>
-            <p id="authPendingMsg" style="color:#94a3b8; font-size:0.85rem; line-height:1.6;">Your IP and Employee ID are verified. IT Department must authorize this workstation before you can proceed.</p>
-            <button id="checkAuthBtn" class="btn btn-success" style="margin-top:10px;" onclick="checkITAuthorization()">
-                <i class="fas fa-shield-alt"></i> Check IT Authorization
-            </button>
-            <div id="activateError" style="color:#f87171; font-size:0.85rem; margin-top:10px; display:none;"></div>
-            <button class="btn btn-outline" style="margin-top:10px; color:#94a3b8; background:transparent; border-color:#334155; font-size:0.8rem;" onclick="resetAuthFlow()">
-                ← Start over
-            </button>
-        </div>
-    </div>
-</div>
-
-<!-- ══════════════════════════════════════════
-     STEP 2: LOGIN OVERLAY
-     Shown after workstation is activated
-═══════════════════════════════════════════ -->
-<div id="loginOverlay">
-    <div class="login-box">
-        <img src="data:image/jpeg;base64,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" style="width:72px;height:72px;object-fit:contain;margin-bottom:12px;filter:drop-shadow(0 4px 12px rgba(30,58,138,0.25));">
-        <h2>Godavari Urban</h2>
-        <p>Multi-State Credit Co-Op Society Ltd. Nanded</p>
-        <div style="font-weight:bold; margin-bottom:15px; color:var(--primary-dark); font-size:0.9rem;">
+        <h2 style="margin:0 0 4px 0; color:#fff;">Godavari Urban</h2>
+        <p style="color:#94a3b8; font-size:0.85rem; margin:0 0 6px 0;">Multi-State Credit Co-Op Society Ltd.</p>
+        <div style="color:#93c5fd; font-size:0.8rem; margin-bottom:24px;">
             <i class="fas fa-file-signature"></i> Internal Branch Document Authorization Tool
         </div>
-        <div id="loginEmpIdDisplay"></div>
-        <input type="password" id="passInput" placeholder="Enter Security Pin / Password" onkeydown="if(event.key==='Enter') handleLogin()">
-        <button onclick="handleLogin()" id="loginBtn">
-            <i class="fas fa-sign-in-alt"></i> Authorized Access Only
+
+        <div id="signInStatus" style="color:#94a3b8; font-size:0.85rem; margin-bottom:18px; min-height:20px;"></div>
+
+        <button id="msSignInBtn" onclick="startMsLogin()" style="
+            width:100%; padding:14px; border-radius:10px; border:none; cursor:pointer;
+            background:#fff; color:#1e293b; font-size:1rem; font-weight:600;
+            display:flex; align-items:center; justify-content:center; gap:12px;
+            box-shadow:0 2px 8px rgba(0,0,0,0.25); transition:background 0.2s;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 21 21">
+                <rect x="1" y="1" width="9" height="9" fill="#f25022"/>
+                <rect x="11" y="1" width="9" height="9" fill="#7fba00"/>
+                <rect x="1" y="11" width="9" height="9" fill="#00a4ef"/>
+                <rect x="11" y="11" width="9" height="9" fill="#ffb900"/>
+            </svg>
+            Sign in with Microsoft 365
         </button>
-        <div id="loginError" style="color:var(--danger); display:none; margin-top:15px; font-weight:bold; font-size:0.9rem;">
-            <i class="fas fa-exclamation-triangle"></i> Authentication Failed!
-        </div>
-        <div id="loginLoader" class="loader-text" style="color:#64748b;">
-            <i class="fas fa-spinner fa-spin"></i> Verifying...
-        </div>
+
+        <div id="signInError" style="color:#f87171; font-size:0.85rem; margin-top:14px; display:none; white-space:pre-line; line-height:1.5;"></div>
+        <p style="color:#475569; font-size:0.75rem; margin-top:20px; line-height:1.6;">
+            Use your Godavari Urban Microsoft 365 work account.<br>
+            <i class="fas fa-lock" style="color:#3b82f6;"></i> Secure — no passwords stored in this app.
+        </p>
     </div>
 </div>
+
+<!-- loginOverlay kept as hidden stub so existing JS references don't break -->
+<div id="loginOverlay" style="display:none;"></div>
 
 <!-- ══════════════════════════════════════════
      SECURE MODAL (Password prompts)
@@ -474,82 +445,75 @@ const SHAREPOINT_SITE_NAME = "GUMCCSLFDCOMMISTION";                      // ✅ 
 const GRAPH         = "https://graph.microsoft.com/v1.0";
 const SP_SITE_PATH  = `/sites/${SHAREPOINT_HOST}:/sites/${SHAREPOINT_SITE_NAME}`;
 
-// ══════════════════════════════════════════════════════════════════
-//  MSAL — Delegated login using branch manager's M365 account
-//  App is embedded in SharePoint — branch managers are already
-//  logged into M365, so acquireTokenSilent works with NO popup.
-//  redirectUri points to the GitHub redirect.html blank page
-//  (registered in Azure) so popup closes cleanly.
-// ══════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════
+//  TOKEN — Delegated (MSAL Popup) Flow
+//  Branch managers sign in with their Microsoft 365 account.
+//  No client secret in the code — fully secure.
+// ══════════════════════════════════════════════════════════════
+
 const _msalConfig = {
     auth: {
         clientId:    CLIENT_ID,
-        authority:   `https://login.microsoftonline.com/${TENANT_ID}`,
-        redirectUri: "https://godavariurban.sharepoint.com/sites/GUMCCSLFDCOMMISTION/SitePages/redirect.aspx"
+        authority:   "https://login.microsoftonline.com/" + TENANT_ID,
+        redirectUri: window.location.href.split('?')[0].split('#')[0]
     },
-    cache: { cacheLocation: "localStorage", storeAuthStateInCookie: true }
+    cache: { cacheLocation: "sessionStorage", storeAuthStateInCookie: true }
 };
-const _msalInstance = new msal.PublicClientApplication(_msalConfig);
-const _SP_SCOPES    = ["User.Read", "Sites.ReadWrite.All"];
+const _msalScopes = ["Sites.ReadWrite.All", "Mail.Send", "User.Read"];
 
-let _msalReady = false;
-async function _ensureMsalReady() {
-    if (_msalReady) return;
+let _msalInstance = null;
+let _spSiteId     = null;
+let _spToken      = null;
+let _spTokenExp   = 0;
+let _msalAccount  = null;   // the signed-in M365 account
+
+async function _getMsalInstance() {
+    if (_msalInstance) return _msalInstance;
+    _msalInstance = new msal.PublicClientApplication(_msalConfig);
     await _msalInstance.initialize();
-    await _msalInstance.handleRedirectPromise().catch(() => {});
-    _msalReady = true;
+    return _msalInstance;
 }
 
-let _spSiteId   = null;
-let _spToken    = null;
-let _spTokenExp = 0;
-
-// ── Get token using branch manager's M365 account
-// Since app is inside SharePoint (where they are already logged in),
-// acquireTokenSilent succeeds silently — no popup, no login screen.
-// If silent fails (first time / token expired), loginPopup opens briefly
-// and closes automatically using the blank redirect.html page.
 async function _getSpToken() {
-    await _ensureMsalReady();
     const now = Date.now();
     if (_spToken && _spTokenExp > now + 60000) return _spToken;
 
-    // Try silent first — works immediately if already logged into M365
-    const accounts = _msalInstance.getAllAccounts();
-    if (accounts.length > 0) {
+    const msalApp = await _getMsalInstance();
+
+    // Try silent first (token already in session cache)
+    if (_msalAccount) {
         try {
-            const r = await _msalInstance.acquireTokenSilent({
-                scopes:  _SP_SCOPES,
-                account: accounts[0]
+            const silent = await msalApp.acquireTokenSilent({
+                scopes:  _msalScopes,
+                account: _msalAccount
             });
-            _spToken    = r.accessToken;
-            _spTokenExp = now + (r.expiresOn ? (r.expiresOn.getTime() - now) : 3600000);
+            _spToken    = silent.accessToken;
+            _spTokenExp = now + 3500000;
             return _spToken;
-        } catch(e) { /* silent failed — try popup */ }
+        } catch (e) { /* silent failed — fall through to popup */ }
     }
 
-    // Popup login — opens small window, closes automatically after M365 SSO
-    // Branch manager is already signed in to M365 so this completes in ~1 second
-    try {
-        const r = await _msalInstance.loginPopup({
-            scopes: _SP_SCOPES,
-            prompt: "none"  // silent SSO — no credentials screen shown
-        });
-        _spToken    = r.accessToken;
-        _spTokenExp = now + (r.expiresOn ? (r.expiresOn.getTime() - now) : 3600000);
-        return _spToken;
-    } catch(e) {
-        // If prompt:none fails, show actual login popup (only on very first use)
-        const r = await _msalInstance.loginPopup({ scopes: _SP_SCOPES });
-        _spToken    = r.accessToken;
-        _spTokenExp = now + (r.expiresOn ? (r.expiresOn.getTime() - now) : 3600000);
-        return _spToken;
-    }
+    // Popup sign-in
+    const result = await msalApp.acquireTokenPopup({ scopes: _msalScopes });
+    _msalAccount = result.account;
+    _spToken     = result.accessToken;
+    _spTokenExp  = now + 3500000;
+    return _spToken;
 }
 
 // ── Generic Graph API call
 async function _graph(method, endpoint, body) {
-    const token = await _getSpToken();
+    let token;
+    try {
+        token = await _getSpToken();
+    } catch(e) {
+        await guAlert(
+            "Cannot connect to SharePoint.\n\nError: " + e.message +
+            "\n\nPlease contact IT Department.",
+            'danger'
+        );
+        throw e;
+    }
     const opts = {
         method,
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }
@@ -1064,14 +1028,12 @@ function detectIP() {
             const label = document.getElementById("ipLabel");
             if (detected) {
                 currentIP = detected;
-                label.innerText = "NETWORK IP: " + detected;
+                if (label) label.innerText = "NETWORK IP: " + detected;
                 // stnIP will be set when launchMainApp runs — currentIP is ready by then
                 resolve(detected);
             } else {
-                // IP could not be detected — block the app entirely.
-                // Manual entry is NOT allowed for security — IP must always come from the system.
-                label.innerHTML = "";
-                showIPBlockedError();
+                // IP could not be detected — log but don't block (MS login handles auth)
+                if (label) { label.innerHTML = ""; showIPBlockedError(); }
                 resolve("");
             }
         }, 2000);
@@ -1084,6 +1046,7 @@ function showIPBlockedError() {
     if (btn) btn.disabled = true;
 
     const label = document.getElementById("ipLabel");
+    if (!label) return;
     label.innerHTML =
         '<div style="background:#1e1b2e;border:1px solid #ef4444;border-radius:10px;padding:14px 16px;margin-top:8px;text-align:left;">' +
         '<div style="color:#f87171;font-weight:700;font-size:0.9rem;margin-bottom:6px;">' +
@@ -1096,42 +1059,139 @@ function showIPBlockedError() {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  APP INIT — shows correct screen INSTANTLY, detects IP in background
+//  APP INIT — show Microsoft sign-in screen, check for cached session
 // ═══════════════════════════════════════════════════════════════
 async function initApp() {
-    const activatedEmpId = localStorage.getItem("gu_activated_empId");
-    const pendingStoredEmpId = localStorage.getItem("gu_pending_empId");
+    // Always show auth overlay (Microsoft sign-in) first
+    document.getElementById("authOverlay").style.display  = "flex";
+    document.getElementById("mainApp").style.display      = "none";
 
-    if (!activatedEmpId) {
-        document.getElementById("authOverlay").style.display  = "flex";
-        document.getElementById("loginOverlay").style.display = "none";
-        detectIP();
-
-        if (pendingStoredEmpId) {
-            pendingEmpId = pendingStoredEmpId;
-            document.getElementById("displayReqId").innerText = pendingStoredEmpId;
-            document.getElementById("authPendingMsg").innerText = "Your Employee ID and IP were already verified. Pending to IT Department for workstation authorization.";
-            document.getElementById("authStep1").classList.add("hidden");
-            document.getElementById("authStep2").classList.remove("hidden");
+    // Try silent sign-in if user already signed in this session
+    try {
+        const msalApp = await _getMsalInstance();
+        const accounts = msalApp.getAllAccounts();
+        if (accounts.length > 0) {
+            _msalAccount = accounts[0];
+            document.getElementById("signInStatus").innerHTML =
+                '<i class="fas fa-spinner fa-spin"></i> Resuming your session...';
+            await completeMsLogin();
         }
-    } else {
-        // Already activated — show login screen IMMEDIATELY
-        pendingEmpId = activatedEmpId;
-        document.getElementById("authOverlay").style.display  = "none";
-        document.getElementById("loginOverlay").style.display = "flex";
-        document.getElementById("loginEmpIdDisplay").innerHTML =
-            '<i class="fas fa-id-badge"></i> ' + activatedEmpId;
+    } catch (e) {
+        // No cached session — wait for button click
+        document.getElementById("signInStatus").innerText = "";
+    }
 
-        // Detect local network IP on every app open, including already-activated workstations.
-        detectIP();
+    // Also detect local IP in background (for logging)
+    detectIP();
+}
 
-        // Device status check runs after screen is visible
+// ═══════════════════════════════════════════════════════════════
+//  MICROSOFT SIGN-IN — triggered by the Sign in button
+// ═══════════════════════════════════════════════════════════════
+async function startMsLogin() {
+    const btn = document.getElementById("msSignInBtn");
+    const errEl = document.getElementById("signInError");
+    const statusEl = document.getElementById("signInStatus");
+
+    errEl.style.display = "none";
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Signing in...';
+    statusEl.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Opening Microsoft sign-in...';
+
+    try {
+        // This triggers the MSAL popup — user signs in with their M365 account
+        await _getSpToken();   // acquires token and sets _msalAccount
+        await completeMsLogin();
+    } catch (e) {
+        const msg = e.message || String(e);
+        if (msg.includes("popup_window_error") || msg.includes("user_cancelled")) {
+            errEl.innerText = "Sign-in was cancelled. Please try again.";
+        } else {
+            errEl.innerText = "Sign-in failed: " + msg + "\n\nPlease contact IT if this continues.";
+        }
+        errEl.style.display = "block";
+        statusEl.innerText = "";
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 21 21"><rect x="1" y="1" width="9" height="9" fill="#f25022"/><rect x="11" y="1" width="9" height="9" fill="#7fba00"/><rect x="1" y="11" width="9" height="9" fill="#00a4ef"/><rect x="11" y="11" width="9" height="9" fill="#ffb900"/></svg> Sign in with Microsoft 365';
+    }
+}
+
+// ─── After a successful M365 login: look up the user in SharePoint GU_Branches
+async function completeMsLogin() {
+    const statusEl = document.getElementById("signInStatus");
+    const errEl    = document.getElementById("signInError");
+
+    try {
+        // Get the signed-in user's email from MS Graph
+        statusEl.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Verifying branch access...';
+
+        const meRes  = await fetch("https://graph.microsoft.com/v1.0/me?$select=displayName,mail,userPrincipalName",
+            { headers: { Authorization: "Bearer " + await _getSpToken() } });
+        const me     = await meRes.json();
+        const email  = (me.mail || me.userPrincipalName || "").toLowerCase().trim();
+
+        if (!email) throw new Error("Could not read your Microsoft 365 email address.");
+
+        // Find this user in GU_Branches by BranchEmail field
+        const item = await _spFind("GU_Branches", "BranchEmail", email);
+
+        if (!item) {
+            errEl.innerText = "Access Denied.\n\nYour Microsoft 365 account (" + email + ") is not registered in the branch system.\n\nPlease contact IT Department to register your account.";
+            errEl.style.display = "block";
+            statusEl.innerText = "";
+            return;
+        }
+
+        // Check branch status
+        const status    = String(item.ManagerStatus   || "").toUpperCase();
+        const activated = item.Activated === true || String(item.Activated || "").toString() === "true";
+
+        if (status === "BRANCH_CLOSED") {
+            errEl.innerText = "Access Denied: This branch has been closed by IT.";
+            errEl.style.display = "block";
+            statusEl.innerText = "";
+            return;
+        }
+
+        if (!activated) {
+            errEl.innerText = "Access Denied: Your branch account is not yet activated.\n\nPlease contact IT Department.";
+            errEl.style.display = "block";
+            statusEl.innerText = "";
+            return;
+        }
+
+        // ✅ All checks passed — launch the app
+        pendingEmpId = item.EmpID || email;
+        currentUser = {
+            name:    item.EmpName  || me.displayName || email,
+            branch:  item.Branch   || "",
+            post:    item.Post     || "",
+            empCode: item.EmpID    || email
+        };
+
+        if (!currentIP) await detectIP();
+
+        // Load saved signature
+        const sigKey = "sig_" + currentUser.empCode;
+        if (item.SignatureRevoked === true || String(item.SignatureRevoked || "") === "true") {
+            localStorage.removeItem(sigKey);
+        }
+        currentUser.savedSig = localStorage.getItem(sigKey) || null;
+
+        // Log the sign-in
         try {
-            const isStillAllowed = await enforceDeviceStatus(activatedEmpId);
-            if (!isStillAllowed) return;
-        } catch (err) {
-            console.warn("Could not verify device status. Login will verify again.", err);
-        }
+            await _logJourney(item.Branch, item.EmpID, item.EmpName, item.Post, currentIP || "",
+                "AUTHORIZED", "MS365_LOGIN", "Branch manager signed in via Microsoft 365.");
+        } catch(e) { /* non-fatal */ }
+
+        document.getElementById("authOverlay").style.display = "none";
+        launchMainApp();
+
+    } catch (e) {
+        errEl.innerText = "Error: " + (e.message || String(e));
+        errEl.style.display = "block";
+        statusEl.innerText = "";
     }
 }
 
@@ -1435,14 +1495,31 @@ function forceLogout() {
     if (pgTotal) pgTotal.innerText = "1";
 
     document.getElementById("mainApp").style.display      = "none";
-    document.getElementById("loginOverlay").style.display = "flex";
-    document.getElementById("passInput").value = "";
-    hideError("loginError");
+    document.getElementById("authOverlay").style.display  = "flex";
+    // Clear any error from previous session
+    const errEl = document.getElementById("signInError");
+    if (errEl) errEl.style.display = "none";
+    const statusEl = document.getElementById("signInStatus");
+    if (statusEl) statusEl.innerText = "";
 }
 
 async function logoutSystem() {
     const ok = await guConfirm("Are you sure you want to exit the current session?", 'confirm', 'Yes, Exit', 'Cancel');
-    if (ok) forceLogout();
+    if (ok) {
+        // Clear MSAL cached token so the sign-in button shows again
+        _spToken    = null;
+        _spTokenExp = 0;
+        _msalAccount = null;
+        try {
+            const msalApp = await _getMsalInstance();
+            // Clear all accounts from session cache
+            const accounts = msalApp.getAllAccounts();
+            for (const acc of accounts) {
+                await msalApp.clearCache({ account: acc });
+            }
+        } catch(e) { /* non-fatal */ }
+        forceLogout();
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════
