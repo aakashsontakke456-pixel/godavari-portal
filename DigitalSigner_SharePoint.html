@@ -458,6 +458,20 @@
 //  ║    d) Create list "GU_BranchJourney" with columns:                            ║
 //  ║       Timestamp, Branch, EmpID, EmpName, Post, AllowedIP,                    ║
 //  ║       Status, Action, Details, ChangedBy                                      ║
+//  ║    e) Create list "GU_SignedDocs" with these columns (used to detect          ║
+//  ║       copied/forged signatures — see Verify Document tool in Admin Panel):    ║
+//  ║       ┌─────────────────────┬─────────────────────────────────────────┐       ║
+//  ║       │ Column Name         │ Type                                    │       ║
+//  ║       ├─────────────────────┼─────────────────────────────────────────┤       ║
+//  ║       │ Title (EventID)     │ Single line of text  (built-in column)  │       ║
+//  ║       │ Branch              │ Single line of text                     │       ║
+//  ║       │ EmpID               │ Single line of text                     │       ║
+//  ║       │ EmpName             │ Single line of text                     │       ║
+//  ║       │ Post                │ Single line of text                     │       ║
+//  ║       │ DocHash             │ Single line of text (mark as Indexed)   │       ║
+//  ║       │ SignedAt            │ Single line of text                     │       ║
+//  ║       │ FileName            │ Single line of text                     │       ║
+//  ║       └─────────────────────┴─────────────────────────────────────────┘       ║
 //  ║                                                                                ║
 //  ║  ── STEP 3:  Import Your Existing Data ──                                     ║
 //  ║    Open DigitalSignerDB.xlsx → copy the "Branches" sheet data into            ║
@@ -653,11 +667,28 @@ const _SP_WRITE_MAP_BRANCHJOURNEY = {
     "ChangedBy":  "field_9"
 };
 
+// GU_SignedDocs: tamper-evident record created every time a document is signed.
+// EventID (Title) is the short code printed on the visible stamp. DocHash is the
+// SHA-256 fingerprint of the FINAL signed PDF — if the file is changed in any way
+// after signing (including pasting the signature onto a different document or
+// editing the date), this hash will no longer match what's stored here.
+const _SP_WRITE_MAP_SIGNEDDOCS = {
+    "EventID":  "Title",
+    "Branch":   "field_1",
+    "EmpID":    "field_2",
+    "EmpName":  "field_3",
+    "Post":     "field_4",
+    "DocHash":  "field_5",
+    "SignedAt": "field_6",
+    "FileName": "field_7"
+};
+
 function _getWriteMap(listName) {
     if (listName === "GU_Branches")      return _SP_WRITE_MAP_BRANCHES;
     if (listName === "GU_Settings")      return _SP_WRITE_MAP_SETTINGS;
     if (listName === "GU_BranchJourney") return _SP_WRITE_MAP_BRANCHJOURNEY;
     if (listName === "GU_Admins")        return _SP_WRITE_MAP_ADMINS;
+    if (listName === "GU_SignedDocs")    return _SP_WRITE_MAP_SIGNEDDOCS;
     return {};
 }
 
@@ -1011,6 +1042,22 @@ let idleTimer = null;
 async function sha256(text) {
     const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
     return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,"0")).join("");
+}
+
+// ── Hash raw file bytes (used to fingerprint the FINAL signed PDF, not text)
+async function sha256Bytes(bytes) {
+    const ab = bytes instanceof Uint8Array
+        ? bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+        : bytes;
+    const buf = await crypto.subtle.digest("SHA-256", ab);
+    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,"0")).join("");
+}
+
+// ── Short, unique verification code printed on every signature stamp
+function generateEventId() {
+    const ts  = Date.now().toString(36).toUpperCase();
+    const rnd = Math.random().toString(36).slice(2, 6).toUpperCase();
+    return `GU-${ts}-${rnd}`;
 }
 
 // (callScript dispatcher defined above in the SharePoint layer)
@@ -2198,16 +2245,47 @@ async function downloadPDF() {
     // PDF Y axis is inverted (0 = bottom), add 45 offset for signature height
     const y = pH - ((canvasY / canv.height) * pH) - 45;
 
+    // ── Unique verification code for this signing event (printed on the stamp)
+    const eventId  = generateEventId();
+    const signedAt = new Date();
+
     page.drawImage(sigImg, { x, y, width: 80, height: 35 });
 
     const textConfig = { x, size: 6.5, font, color: rgb(0.1, 0.2, 0.5) };
     page.drawText(`Internally Authorized by: ${currentUser.name}`,                          { ...textConfig, y: y - 10 });
     page.drawText(`${currentUser.post}`,                                                { ...textConfig, y: y - 18 });
     page.drawText(`Emp Code: ${currentUser.empCode} | Branch: ${currentUser.branch}`,  { ...textConfig, y: y - 26 });
-    page.drawText(`Date: ${new Date().toLocaleString()}`,                               { ...textConfig, y: y - 34 });
+    page.drawText(`Date: ${signedAt.toLocaleString()}`,                                 { ...textConfig, y: y - 34 });
+    page.drawText(`Verify ID: ${eventId}`,                                              { ...textConfig, y: y - 42 });
 
     const pdfDataUri = await pdfDoc.save();
-    const fileName   = `Signed_${currentUser.branch}_${new Date().toISOString().slice(0,10)}.pdf`;
+    const fileName   = `Signed_${currentUser.branch}_${signedAt.toISOString().slice(0,10)}.pdf`;
+
+    // ── Fingerprint the FINAL signed file and log it centrally.
+    //    Anyone can later re-hash this exact PDF and compare it to this record —
+    //    if someone reused the signature image elsewhere, or edited the date/text,
+    //    the hash will not match and the document fails verification.
+    try {
+        const docHash = await sha256Bytes(pdfDataUri);
+        await _spPost("GU_SignedDocs", {
+            EventID:  eventId,
+            Branch:   currentUser.branch,
+            EmpID:    currentUser.empCode,
+            EmpName:  currentUser.name,
+            Post:     currentUser.post,
+            DocHash:  docHash,
+            SignedAt: signedAt.toISOString(),
+            FileName: fileName
+        });
+    } catch (e) {
+        await guAlert(
+            "The document was signed, but its verification record could not be saved " +
+            "to SharePoint (so it won't be checkable later).\n\nError: " + e.message +
+            "\n\nPlease inform IT, and consider re-signing once the connection is fixed.",
+            'warning'
+        );
+    }
+
     const blob       = new Blob([pdfDataUri], { type: "application/pdf" });
     const url        = URL.createObjectURL(blob);
     const link       = document.createElement("a");

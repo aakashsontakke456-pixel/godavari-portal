@@ -2550,6 +2550,7 @@
       <div class="tab" onclick="switchTab('reports')"    id="tab-reports"><i class="fas fa-file-export"></i> Reports</div>
       <div class="tab" onclick="switchTab('bulk')"       id="tab-bulk"><i class="fas fa-file-upload"></i> Bulk Upload</div>
       <div class="tab" onclick="switchTab('tools')"      id="tab-tools"><i class="fas fa-wrench"></i> IT Tools</div>
+      <div class="tab" onclick="switchTab('verify')"     id="tab-verify"><i class="fas fa-shield-halved"></i> Verify Document</div>
       <div class="sidebar-footer">
         <b>Godavari Urban</b><br>
         Branch authorization and access control
@@ -3028,6 +3029,35 @@ Fill the form on the left to preview the registration email that will be sent to
   </div>
 
   <!-- ════════ PAGE: IT TOOLS ════════ -->
+  <div class="page" id="page-verify">
+    <div class="section-header">
+      <div class="section-title">Verify Document <span>Check whether a signed PDF is authentic and unchanged since signing</span></div>
+    </div>
+
+    <div class="card" style="border-top:3px solid var(--accent);max-width:560px;">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
+        <div style="width:36px;height:36px;border-radius:10px;background:rgba(37,99,235,0.12);display:grid;place-items:center;flex-shrink:0;">
+          <i class="fas fa-shield-halved" style="color:var(--accent);font-size:0.95rem;"></i>
+        </div>
+        <div>
+          <div style="font-weight:700;font-size:0.92rem;color:var(--white);">Upload a signed PDF</div>
+          <div style="font-size:0.73rem;color:var(--muted);">We re-check its fingerprint against the signing log — the file never leaves your browser</div>
+        </div>
+      </div>
+      <hr style="border:none;border-top:1px solid var(--border);margin:14px 0;">
+
+      <div class="form-group" style="margin-bottom:10px;">
+        <label>Signed PDF file</label>
+        <input type="file" id="verifyFileInput" accept="application/pdf" style="padding:10px 12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:0.88rem;font-family:'IBM Plex Sans',sans-serif;width:100%;">
+      </div>
+      <button class="btn btn-primary" style="width:100%;" onclick="verifyDocument()" id="verifyBtn">
+        <i class="fas fa-magnifying-glass"></i> Verify document
+      </button>
+
+      <div id="verifyResult" style="margin-top:16px;"></div>
+    </div>
+  </div>
+
   <div class="page" id="page-tools">
     <div class="section-header">
       <div class="section-title">IT Tools <span>Utilities for managing the Internal Branch Document Authorization Tool system</span></div>
@@ -3566,6 +3596,19 @@ const SP_READ_MAP_ADMINS = {
     "field_2": "Password"
 };
 
+// GU_SignedDocs: created by the branch Digital Signer tool every time a document
+// is signed. EventID is stored in Title; we only ever READ this list here, to
+// verify documents — never write to it from the admin panel.
+const SP_READ_MAP_SIGNEDDOCS = {
+    "field_1": "Branch",
+    "field_2": "EmpID",
+    "field_3": "EmpName",
+    "field_4": "Post",
+    "field_5": "DocHash",
+    "field_6": "SignedAt",
+    "field_7": "FileName"
+};
+
 function _getWriteMap(listName) {
     if (listName === "GU_Settings")      return SP_WRITE_MAP_SETTINGS;
     if (listName === "GU_Branches")      return SP_WRITE_MAP_BRANCHES;
@@ -3610,6 +3653,7 @@ function _getReadMap(listName) {
     if (listName === "GU_Branches")      return SP_READ_MAP_BRANCHES;
     if (listName === "GU_BranchJourney") return SP_READ_MAP_BRANCHJOURNEY;
     if (listName === "GU_Admins")        return SP_READ_MAP_ADMINS;
+    if (listName === "GU_SignedDocs")    return SP_READ_MAP_SIGNEDDOCS;
     return {};
 }
 
@@ -3629,6 +3673,11 @@ function spFieldsFromSP(listName, fields) {
     // GU_BranchJourney stores Timestamp in the Title column
     if (listName === "GU_BranchJourney" && mapped.hasOwnProperty("Title")) {
         mapped.Timestamp = mapped.Title;
+        delete mapped.Title;
+    }
+    // GU_SignedDocs stores EventID in the Title column
+    if (listName === "GU_SignedDocs" && mapped.hasOwnProperty("Title")) {
+        mapped.EventID = mapped.Title;
         delete mapped.Title;
     }
     // Strip 🟡 prefix from Yes/No display names (fallback in case SP returns them)
@@ -4080,6 +4129,66 @@ const AUTO_REFRESH_MS = 60000;
 async function sha256(text) {
     const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
     return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,"0")).join("");
+}
+
+// ── Hash raw file bytes (used by the Verify Document tool to fingerprint an uploaded PDF)
+async function sha256Bytes(arrayBuffer) {
+    const buf = await crypto.subtle.digest("SHA-256", arrayBuffer);
+    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,"0")).join("");
+}
+
+// ── Verify Document tool: re-hash an uploaded PDF and compare it to the
+//    GU_SignedDocs log written by the branch Digital Signer tool.
+async function verifyDocument() {
+    const fileInput = document.getElementById("verifyFileInput");
+    const resultBox = document.getElementById("verifyResult");
+    const btn       = document.getElementById("verifyBtn");
+    resultBox.innerHTML = "";
+
+    if (!fileInput.files || !fileInput.files[0]) {
+        resultBox.innerHTML = `<div style="padding:12px 16px;border-radius:8px;background:rgba(217,119,6,0.12);color:var(--yellow);font-size:0.85rem;">Please choose a PDF file first.</div>`;
+        return;
+    }
+
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner spin"></i> Checking...';
+
+    try {
+        const file  = fileInput.files[0];
+        const bytes = await file.arrayBuffer();
+        const hash  = await sha256Bytes(bytes);
+
+        const record = await spFindItem("GU_SignedDocs", "DocHash", hash);
+
+        if (record) {
+            resultBox.innerHTML = `
+                <div style="padding:16px;border-radius:10px;background:rgba(5,150,105,0.12);border:1px solid rgba(5,150,105,0.4);">
+                    <div style="font-weight:700;color:var(--green);font-size:0.9rem;margin-bottom:8px;"><i class="fas fa-circle-check"></i> Authentic — unchanged since signing</div>
+                    <div style="font-size:0.82rem;color:var(--text);line-height:1.7;">
+                        Verify ID: <strong>${record.EventID || "-"}</strong><br>
+                        Signed by: <strong>${record.EmpName || "-"}</strong> (${record.EmpID || "-"})<br>
+                        Designation: ${record.Post || "-"}<br>
+                        Branch: ${record.Branch || "-"}<br>
+                        Signed at: ${record.SignedAt ? new Date(record.SignedAt).toLocaleString() : "-"}
+                    </div>
+                </div>`;
+        } else {
+            resultBox.innerHTML = `
+                <div style="padding:16px;border-radius:10px;background:rgba(220,38,38,0.12);border:1px solid rgba(220,38,38,0.4);">
+                    <div style="font-weight:700;color:var(--red);font-size:0.9rem;margin-bottom:8px;"><i class="fas fa-triangle-exclamation"></i> No matching record found</div>
+                    <div style="font-size:0.82rem;color:var(--text);line-height:1.7;">
+                        Either this file was changed after it was signed (including the signature, date, or any other text),
+                        or it does not match any document signed through the branch tool. Treat it as unverified and confirm
+                        with the branch directly before relying on it.
+                    </div>
+                </div>`;
+        }
+    } catch (e) {
+        resultBox.innerHTML = `<div style="padding:12px 16px;border-radius:8px;background:rgba(220,38,38,0.12);color:var(--red);font-size:0.85rem;">Could not check this file: ${e.message}</div>`;
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-magnifying-glass"></i> Verify document';
+    }
 }
 
 function toast(msg, type = "success") {
