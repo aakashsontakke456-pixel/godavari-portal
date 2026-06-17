@@ -184,7 +184,13 @@
             <i class="fas fa-file-signature"></i> Internal Branch Document Authorization Tool
         </div>
 
-        <div id="signInStatus" style="color:#94a3b8; font-size:0.85rem; margin-bottom:18px; min-height:20px;"></div>
+        <div id="signInStatus" style="color:#94a3b8; font-size:0.85rem; margin-bottom:10px; min-height:20px;"></div>
+
+        <!-- IP Detection Status -->
+        <div id="ipVerifyBox" style="background:#0f172a; border:1px solid #334155; border-radius:10px; padding:10px 14px; margin-bottom:16px; font-size:0.78rem; font-family:monospace; text-align:left;">
+            <div style="color:#64748b; margin-bottom:4px;"><i class="fas fa-network-wired"></i> Network IP Detection</div>
+            <div id="ipStatusLine" style="color:#fbbf24;"><i class="fas fa-spinner fa-spin"></i> Detecting your network IP...</div>
+        </div>
 
         <button id="msSignInBtn" onclick="startMsLogin()" style="
             width:100%; padding:14px; border-radius:10px; border:none; cursor:pointer;
@@ -659,7 +665,7 @@ async function _spGetAll(listName) {
 // ── Find a single item by field value (always client-side — avoids internal SP field name mismatch)
 async function _spFind(listName, fieldName, value) {
     const all = await _spGetAll(listName);
-    return all.find(i => String(i[fieldName] ?? "").trim() === String(value ?? "").trim()) || null;
+    return all.find(i => String(i[fieldName] ?? "").trim().toLowerCase() === String(value ?? "").trim().toLowerCase()) || null;
 }
 
 // ── Update a list item
@@ -1026,14 +1032,15 @@ function detectIP() {
             const detected = bankIP || lanIP || candidates[0] || "";
 
             const label = document.getElementById("ipLabel");
+            const ipLine = document.getElementById("ipStatusLine");
             if (detected) {
                 currentIP = detected;
                 if (label) label.innerText = "NETWORK IP: " + detected;
-                // stnIP will be set when launchMainApp runs — currentIP is ready by then
+                if (ipLine) ipLine.innerHTML = '<i class="fas fa-check-circle" style="color:#10b981"></i> <span style="color:#10b981">IP Detected: </span><span style="color:#fff">' + detected + '</span>';
                 resolve(detected);
             } else {
-                // IP could not be detected — log but don't block (MS login handles auth)
                 if (label) { label.innerHTML = ""; showIPBlockedError(); }
+                if (ipLine) ipLine.innerHTML = '<i class="fas fa-exclamation-triangle" style="color:#ef4444"></i> <span style="color:#ef4444">IP could not be detected. Contact IT.</span>';
                 resolve("");
             }
         }, 2000);
@@ -1046,7 +1053,6 @@ function showIPBlockedError() {
     if (btn) btn.disabled = true;
 
     const label = document.getElementById("ipLabel");
-    if (!label) return;
     label.innerHTML =
         '<div style="background:#1e1b2e;border:1px solid #ef4444;border-radius:10px;padding:14px 16px;margin-top:8px;text-align:left;">' +
         '<div style="color:#f87171;font-weight:700;font-size:0.9rem;margin-bottom:6px;">' +
@@ -1145,7 +1151,8 @@ async function completeMsLogin() {
 
         // Check branch status
         const status    = String(item.ManagerStatus   || "").toUpperCase();
-        const activated = item.Activated === true || String(item.Activated || "").toString() === "true";
+        const activated = item.Activated === true || String(item.Activated || "").toString() === "true"
+                          || status === "PENDING_ACTIVATION" || status === "PENDING_FILE_SEND";
 
         if (status === "BRANCH_CLOSED") {
             errEl.innerText = "Access Denied: This branch has been closed by IT.";
@@ -1171,6 +1178,18 @@ async function completeMsLogin() {
         };
 
         if (!currentIP) await detectIP();
+
+        // Show IP vs AllowedIP match on login screen
+        const ipLine = document.getElementById("ipStatusLine");
+        if (ipLine) {
+            const allowedIP = item.AllowedIP || "";
+            const ipMatch = allowedIP && currentIP && currentIP.trim() === allowedIP.trim();
+            if (allowedIP) {
+                ipLine.innerHTML = ipMatch
+                    ? '<i class="fas fa-check-circle" style="color:#10b981"></i> <span style="color:#10b981">IP Matched: </span><span style="color:#fff">' + currentIP + '</span>'
+                    : '<i class="fas fa-exclamation-triangle" style="color:#f59e0b"></i> <span style="color:#f59e0b">IP: ' + (currentIP||"unknown") + ' | Registered: ' + allowedIP + '</span>';
+            }
+        }
 
         // Load saved signature
         const sigKey = "sig_" + currentUser.empCode;
@@ -1226,13 +1245,13 @@ async function verifyIdentity() {
         // Success - show IT authorization status
         pendingEmpId = empId;
         localStorage.setItem("gu_pending_empId", empId);
-        document.getElementById("displayReqId").innerText = (res.branch || "Branch") + " | " + (res.name || empId);
+        const _dri = document.getElementById("displayReqId"); if(_dri) _dri.innerText = (res.branch || "Branch") + " | " + (res.name || empId);
         if (res.authorized) {
-            document.getElementById("authPendingMsg").innerText = "IT Department has authorized your workstation. Click Check IT Authorization to proceed.";
+            const _apm1 = document.getElementById("authPendingMsg"); if(_apm1) _apm1.innerText = "IT Department has authorized your workstation. Click Check IT Authorization to proceed.";
         } else {
-            document.getElementById("authPendingMsg").innerText = "Your IP and Employee ID are verified. Pending to IT Department for workstation authorization.";
+            const _apm2 = document.getElementById("authPendingMsg"); if(_apm2) _apm2.innerText = "Your IP and Employee ID are verified. Pending to IT Department for workstation authorization.";
         }
-        document.getElementById("authStep1").classList.add("hidden");
+        const _as1a = document.getElementById("authStep1"); if(_as1a) _as1a.classList.add("hidden");
         document.getElementById("authStep2").classList.remove("hidden");
 
     } catch (err) {
@@ -1283,7 +1302,7 @@ async function checkITAuthorization() {
 }
 
 function resetAuthFlow() {
-    document.getElementById("authStep1").classList.remove("hidden");
+    const _as1r = document.getElementById("authStep1"); if(_as1r) _as1r.classList.remove("hidden");
     document.getElementById("authStep2").classList.add("hidden");
     document.getElementById("empIdAuth").value = "";
     localStorage.removeItem("gu_pending_empId");
@@ -1386,6 +1405,18 @@ async function handleLogin() {
         };
 
         if (!currentIP) await detectIP();
+
+        // Show IP vs AllowedIP match on login screen
+        const ipLine = document.getElementById("ipStatusLine");
+        if (ipLine) {
+            const allowedIP = item.AllowedIP || "";
+            const ipMatch = allowedIP && currentIP && currentIP.trim() === allowedIP.trim();
+            if (allowedIP) {
+                ipLine.innerHTML = ipMatch
+                    ? '<i class="fas fa-check-circle" style="color:#10b981"></i> <span style="color:#10b981">IP Matched: </span><span style="color:#fff">' + currentIP + '</span>'
+                    : '<i class="fas fa-exclamation-triangle" style="color:#f59e0b"></i> <span style="color:#f59e0b">IP: ' + (currentIP||"unknown") + ' | Registered: ' + allowedIP + '</span>';
+            }
+        }
 
         // Load saved signature from localStorage (keyed by empId)
         const sigKey = "sig_" + res.empId;
