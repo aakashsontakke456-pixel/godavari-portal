@@ -342,6 +342,15 @@
                     </div>
                 </div>
 
+                <!-- Signing History -->
+                <div class="card">
+                    <h4>Signing History</h4>
+                    <p style="font-size:0.78rem; color:#64748b; margin:0 0 10px;">View the documents you've signed and their verification IDs.</p>
+                    <button class="btn btn-outline" onclick="openSigningHistory()">
+                        <i class="fas fa-clock-rotate-left"></i> View My Signing History
+                    </button>
+                </div>
+
             </div>
             <div class="sidebar-footer">
                 <button class="btn btn-success" onclick="downloadPDF()">
@@ -379,6 +388,19 @@
         </div>
         <div class="gu-dialog-body" id="guDialogBody"></div>
         <div class="gu-dialog-footer" id="guDialogFooter"></div>
+    </div>
+</div>
+
+<!-- ══ SIGNING HISTORY MODAL ══ -->
+<div id="historyModal" style="display:none; position:fixed; inset:0; background:rgba(10,15,40,0.72); backdrop-filter:blur(3px); z-index:999998; justify-content:center; align-items:center;">
+    <div style="background:#fff; border-radius:18px; width:92%; max-width:720px; max-height:80vh; display:flex; flex-direction:column; box-shadow:0 30px 80px rgba(0,0,0,0.45); overflow:hidden;">
+        <div style="display:flex; align-items:center; justify-content:space-between; padding:18px 24px; border-bottom:1px solid #f1f5f9;">
+            <div style="font-size:1rem; font-weight:700; color:#0f172a;"><i class="fas fa-clock-rotate-left"></i>&nbsp; My Signing History</div>
+            <button onclick="closeSigningHistory()" style="border:none; background:none; font-size:1.1rem; color:#94a3b8; cursor:pointer;"><i class="fas fa-times"></i></button>
+        </div>
+        <div style="padding:16px 24px; overflow-y:auto; flex:1;" id="historyModalBody">
+            <p style="text-align:center; color:#64748b; font-size:0.85rem;"><i class="fas fa-spinner fa-spin"></i> Loading...</p>
+        </div>
     </div>
 </div>
 
@@ -2292,6 +2314,56 @@ async function downloadPDF() {
     document.body.removeChild(link);
     setTimeout(() => URL.revokeObjectURL(url), 5000);
     showDownloadToast(fileName);
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  MY SIGNING HISTORY
+//  Each branch manager can see only their own signed documents —
+//  filtered client-side by EmpID, never showing other branches' rows.
+// ═══════════════════════════════════════════════════════════════
+async function openSigningHistory() {
+    const modal = document.getElementById("historyModal");
+    const body  = document.getElementById("historyModalBody");
+    modal.style.display = "flex";
+    body.innerHTML = `<p style="text-align:center; color:#64748b; font-size:0.85rem;"><i class="fas fa-spinner fa-spin"></i> Loading your signing history...</p>`;
+
+    try {
+        const all  = await _spGetAll("GU_SignedDocs");
+        const mine = all
+            .filter(r => String(r.EmpID || "").trim().toLowerCase() === String(currentUser.empCode || "").trim().toLowerCase())
+            .sort((a, b) => new Date(b.SignedAt) - new Date(a.SignedAt));
+
+        if (mine.length === 0) {
+            body.innerHTML = `<p style="text-align:center; color:#64748b; font-size:0.85rem; padding:20px 0;">You haven't signed any documents yet.</p>`;
+            return;
+        }
+
+        const rows = mine.map(r => `
+            <tr>
+                <td style="padding:10px 8px; border-bottom:1px solid #f1f5f9; font-size:0.76rem; color:#0f172a; font-family:monospace; white-space:nowrap;">${r.EventID || "-"}</td>
+                <td style="padding:10px 8px; border-bottom:1px solid #f1f5f9; font-size:0.8rem; color:#334155;">${r.FileName || "-"}</td>
+                <td style="padding:10px 8px; border-bottom:1px solid #f1f5f9; font-size:0.8rem; color:#334155; white-space:nowrap;">${r.SignedAt ? new Date(r.SignedAt).toLocaleString() : "-"}</td>
+            </tr>`).join("");
+
+        body.innerHTML = `
+            <p style="font-size:0.78rem; color:#64748b; margin:0 0 12px;">${mine.length} document${mine.length === 1 ? "" : "s"} signed by you.</p>
+            <table style="width:100%; border-collapse:collapse;">
+                <thead>
+                    <tr>
+                        <th style="text-align:left; padding:8px; font-size:0.68rem; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px; border-bottom:1px solid #e2e8f0;">Verify ID</th>
+                        <th style="text-align:left; padding:8px; font-size:0.68rem; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px; border-bottom:1px solid #e2e8f0;">File</th>
+                        <th style="text-align:left; padding:8px; font-size:0.68rem; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px; border-bottom:1px solid #e2e8f0;">Signed at</th>
+                    </tr>
+                </thead>
+                <tbody>${rows}</tbody>
+            </table>`;
+    } catch (e) {
+        body.innerHTML = `<p style="text-align:center; color:#ef4444; font-size:0.85rem; padding:20px 0;">Could not load signing history.<br>${e.message}</p>`;
+    }
+}
+
+function closeSigningHistory() {
+    document.getElementById("historyModal").style.display = "none";
 }
 
 </script>
