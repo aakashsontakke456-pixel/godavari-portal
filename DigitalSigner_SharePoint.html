@@ -864,14 +864,15 @@ async function callScript(payload) {
             return { ok: true };
         }
 
-        // ── Admin reset signature (verify admin password via GU_Settings)
+        // ── Admin reset signature (verify admin password via GU_Admins)
         case "adminResetSig": {
-            const { adminPassHash } = payload;
-            const setting = await _spFind("GU_Settings", "SettingKey", "ADMIN_PASS_HASH");
-            if (!setting) return { ok: false, msg: "Admin password not configured in SharePoint Settings." };
-            const stored = String(setting.SettingValue || "").trim().toLowerCase();
-            const input  = String(adminPassHash || "").trim().toLowerCase();
-            if (stored !== input) return { ok: false, msg: "Incorrect Admin Password." };
+            const { adminPass } = payload;
+            const admins = await _spGetAll("GU_Admins");
+            if (!admins || admins.length === 0) return { ok: false, msg: "Admin record not found in GU_Admins." };
+            const storedPass = String(admins[0].Password || "").trim();
+            const inputPass  = String(adminPass || "").trim();
+            if (!storedPass) return { ok: false, msg: "Admin password not configured in GU_Admins." };
+            if (storedPass !== inputPass) return { ok: false, msg: "Incorrect Admin Password." };
             return { ok: true };
         }
 
@@ -1910,12 +1911,11 @@ async function adminResetSignature() {
         "Enter Admin Password to reset this signature:",
         async (adminPass) => {
             if (!adminPass) return;
-            const adminPassHash = await sha256(adminPass);
 
             try {
                 const res = await callScript({
-                    action:        "adminResetSig",
-                    adminPassHash: adminPassHash
+                    action:    "adminResetSig",
+                    adminPass: adminPass
                 });
 
                 if (!res.ok) {
