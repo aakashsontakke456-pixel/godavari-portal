@@ -51,7 +51,7 @@
         #loginEmpIdDisplay { background: #f1f5f9; border-radius: 8px; padding: 8px 14px; font-size: 0.85rem; color: #475569; margin-bottom: 10px; font-family: monospace; font-weight: bold; }
 
         /* ── SECURE MODAL (password entry) ── */
-        #secureModal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 10000; justify-content: center; align-items: center; }
+        #secureModal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 25000; justify-content: center; align-items: center; }
         .modal-content { background: white; padding: 30px; border-radius: 12px; width: 90%; max-width: 400px; text-align: center; position: relative; color: var(--text); }
         .modal-content input { width: 100%; padding: 12px; margin: 15px 0; border: 1px solid #ddd; border-radius: 8px; font-size: 1rem; outline: none; }
         .modal-content input:focus { border-color: var(--accent); }
@@ -192,8 +192,8 @@
             <div id="ipStatusLine" style="color:#fbbf24;"><i class="fas fa-spinner fa-spin"></i> Detecting your network IP...</div>
         </div>
 
-        <!-- Employee ID Field -->
-        <div style="margin-bottom:16px; text-align:left;">
+        <!-- Employee ID Field (only shown before IT has authorized this workstation) -->
+        <div id="empIdFieldWrap" style="margin-bottom:16px; text-align:left;">
             <label style="color:#94a3b8; font-size:0.78rem; font-weight:600; display:block; margin-bottom:6px; letter-spacing:0.05em;">
                 <i class="fas fa-id-badge" style="color:#3b82f6; margin-right:6px;"></i>EMPLOYEE ID
             </label>
@@ -205,6 +205,26 @@
                 onkeydown="if(event.key==='Enter') document.getElementById('msSignInBtn').click()">
             <div id="empIdError" style="color:#f87171; font-size:0.78rem; margin-top:6px; display:none;">
                 <i class="fas fa-exclamation-circle"></i> <span id="empIdErrorMsg"></span>
+            </div>
+        </div>
+
+        <!-- Password Field (shown instead of Employee ID once IT has authorized this workstation) -->
+        <div id="passwordFieldWrap" style="margin-bottom:16px; text-align:left; display:none;">
+            <div id="loginContextDisplay" style="background:#0f172a; border:1px solid #334155; border-radius:8px; padding:8px 12px; margin-bottom:10px; font-size:0.75rem; color:#93c5fd; font-family:monospace; display:none;"></div>
+            <label style="color:#94a3b8; font-size:0.78rem; font-weight:600; display:block; margin-bottom:6px; letter-spacing:0.05em;">
+                <i class="fas fa-key" style="color:#3b82f6; margin-right:6px;"></i>PASSWORD
+            </label>
+            <input id="loginPassword" type="password" placeholder="Enter your password"
+                style="width:100%; padding:12px 14px; border-radius:8px; border:1px solid #334155;
+                background:#0f172a; color:#fff; font-size:0.95rem; font-family:monospace;
+                outline:none; letter-spacing:0.05em; box-sizing:border-box;"
+                onfocus="this.style.borderColor='#3b82f6'" onblur="this.style.borderColor='#334155'"
+                onkeydown="if(event.key==='Enter') document.getElementById('msSignInBtn').click()">
+            <div id="passwordError" style="color:#f87171; font-size:0.78rem; margin-top:6px; display:none;">
+                <i class="fas fa-exclamation-circle"></i> <span id="passwordErrorMsg"></span>
+            </div>
+            <div style="text-align:right; margin-top:8px;">
+                <span onclick="switchToEmpIdMode()" style="color:#64748b; font-size:0.72rem; text-decoration:underline; cursor:pointer;">Use Employee ID instead</span>
             </div>
         </div>
 
@@ -1118,6 +1138,9 @@ async function initApp() {
     document.getElementById("authOverlay").style.display  = "flex";
     document.getElementById("mainApp").style.display      = "none";
 
+    // Show Employee ID field (pre-authorization) or Password field (post-authorization)
+    updateAuthFieldsUI();
+
     // Try silent sign-in if user already signed in this session
     try {
         const msalApp = await _getMsalInstance();
@@ -1138,27 +1161,168 @@ async function initApp() {
 }
 
 // ═══════════════════════════════════════════════════════════════
+//  PASSWORD MODE — once IT authorizes a branch, this device stops
+//  asking for Employee ID and asks for a Password instead. Reuses
+//  the PassHash / FirstLogin fields already in GU_Branches — the
+//  same fields the IT Admin Panel's "Reset Password" action sets.
+// ═══════════════════════════════════════════════════════════════
+function isPasswordModeActive() {
+    return localStorage.getItem("gu_pwd_mode_active") === "true";
+}
+function setPasswordModeActive(label) {
+    localStorage.setItem("gu_pwd_mode_active", "true");
+    if (label) localStorage.setItem("gu_pwd_mode_label", label);
+}
+function clearPasswordModeActive() {
+    localStorage.removeItem("gu_pwd_mode_active");
+    localStorage.removeItem("gu_pwd_mode_label");
+}
+function switchToEmpIdMode() {
+    clearPasswordModeActive();
+    updateAuthFieldsUI();
+}
+function updateAuthFieldsUI() {
+    const empWrap = document.getElementById("empIdFieldWrap");
+    const pwdWrap = document.getElementById("passwordFieldWrap");
+    const ctxLine = document.getElementById("loginContextDisplay");
+    if (isPasswordModeActive()) {
+        if (empWrap) empWrap.style.display = "none";
+        if (pwdWrap) pwdWrap.style.display = "block";
+        const label = localStorage.getItem("gu_pwd_mode_label") || "";
+        if (ctxLine) {
+            ctxLine.style.display = label ? "block" : "none";
+            ctxLine.innerText = label;
+        }
+    } else {
+        if (empWrap) empWrap.style.display = "block";
+        if (pwdWrap) pwdWrap.style.display = "none";
+    }
+}
+function _resetMsSignInBtn() {
+    const msBtn = document.getElementById("msSignInBtn");
+    if (msBtn) msBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 21 21"><rect x="1" y="1" width="9" height="9" fill="#f25022"/><rect x="11" y="1" width="9" height="9" fill="#7fba00"/><rect x="1" y="11" width="9" height="9" fill="#00a4ef"/><rect x="11" y="11" width="9" height="9" fill="#ffb900"/></svg> Sign in with Microsoft 365';
+}
+
+// Called once a GU_Branches record is confirmed WorkstationStatus = AUTHORIZED.
+// Sets up a permanent password on the first authorized login (or after IT resets
+// it), otherwise verifies the entered password, then launches the main app.
+async function finishAuthorizedLogin(item, displayName) {
+    const statusEl = document.getElementById("signInStatus");
+    const errEl    = document.getElementById("signInError");
+
+    const needsPasswordSetup =
+        item.FirstLogin === true ||
+        String(item.FirstLogin || "").toLowerCase() === "true" ||
+        !item.PassHash;
+
+    const buildUserAndLaunch = () => {
+        setPasswordModeActive((item.Branch || "") + "  •  " + (item.EmpID || ""));
+        pendingEmpId = item.EmpID || displayName;
+        currentUser = {
+            name:    item.EmpName || displayName,
+            branch:  item.Branch  || "",
+            post:    item.Post    || "",
+            empCode: item.EmpID   || displayName
+        };
+        const sigKey = "sig_" + currentUser.empCode;
+        if (item.SignatureRevoked === true || String(item.SignatureRevoked || "") === "true") {
+            localStorage.removeItem(sigKey);
+        }
+        currentUser.savedSig = localStorage.getItem(sigKey) || null;
+        document.getElementById("authOverlay").style.display = "none";
+        launchMainApp();
+    };
+
+    if (needsPasswordSetup) {
+        if (statusEl) statusEl.innerText = "";
+        openSecurePrompt(
+            "Set Your Permanent Password",
+            "Your branch is authorized by IT. Set a permanent password (min 8 characters) — you'll use this instead of your Employee ID for future logins.",
+            async (newPass) => {
+                if (!newPass || newPass.length < 8) {
+                    await guAlert("Minimum 8 characters required.", 'warning');
+                    return;
+                }
+                const newHash = await sha256(newPass);
+                try {
+                    await _spPatch("GU_Branches", item._id, { PassHash: newHash, FirstLogin: false });
+                    await _logJourney(item.Branch, item.EmpID, item.EmpName, item.Post, currentIP || "",
+                        "AUTHORIZED", "PASSWORD_SET", "Branch manager set permanent password after IT authorization.");
+                } catch (e) {
+                    await guAlert("Error saving password: " + (e.message || e), 'danger');
+                    return;
+                }
+                await guAlert("Password set successfully! You're now signed in.", 'success');
+                buildUserAndLaunch();
+            }
+        );
+        return;
+    }
+
+    if (isPasswordModeActive()) {
+        const enteredHash = await sha256(window._loginEnteredPassword || "");
+        const storedHash  = String(item.PassHash || "").trim().toLowerCase();
+        if (enteredHash.trim().toLowerCase() !== storedHash) {
+            if (errEl) {
+                errEl.innerText = "Incorrect password. Please try again, or contact IT Department if you forgot your password.";
+                errEl.style.display = "block";
+            }
+            if (statusEl) statusEl.innerText = "";
+            try {
+                const msalApp = await _getMsalInstance();
+                const accounts = msalApp.getAllAccounts();
+                if (accounts.length > 0) await msalApp.logoutPopup({ account: accounts[0] }).catch(() => {});
+            } catch (e) {}
+            const pwdInput = document.getElementById("loginPassword");
+            if (pwdInput) pwdInput.value = "";
+            _resetMsSignInBtn();
+            return;
+        }
+    }
+
+    buildUserAndLaunch();
+}
+
+// ═══════════════════════════════════════════════════════════════
 //  MICROSOFT SIGN-IN — triggered by the Sign in button
 // ═══════════════════════════════════════════════════════════════
 async function startMsLogin() {
     const btn = document.getElementById("msSignInBtn");
     const errEl = document.getElementById("signInError");
     const statusEl = document.getElementById("signInStatus");
-    const empIdInput = document.getElementById("loginEmpId");
-    const empIdError = document.getElementById("empIdError");
-    const empIdErrorMsg = document.getElementById("empIdErrorMsg");
 
-    // Validate Employee ID field
-    const enteredEmpId = empIdInput ? empIdInput.value.trim() : "";
-    if (!enteredEmpId) {
-        if (empIdError) { empIdErrorMsg.innerText = "Please enter your Employee ID before signing in."; empIdError.style.display = "block"; }
-        if (empIdInput) empIdInput.focus();
-        return;
+    if (isPasswordModeActive()) {
+        // ── Password mode: validate the Password field instead of Employee ID
+        const pwdInput = document.getElementById("loginPassword");
+        const pwdError = document.getElementById("passwordError");
+        const pwdErrorMsg = document.getElementById("passwordErrorMsg");
+        const enteredPassword = pwdInput ? pwdInput.value : "";
+        if (!enteredPassword) {
+            if (pwdError) { pwdErrorMsg.innerText = "Please enter your password before signing in."; pwdError.style.display = "block"; }
+            if (pwdInput) pwdInput.focus();
+            return;
+        }
+        if (pwdError) pwdError.style.display = "none";
+        window._loginEnteredPassword = enteredPassword;
+        window._loginEnteredEmpId   = "";
+    } else {
+        // ── Employee ID mode (pre-authorization flow)
+        const empIdInput = document.getElementById("loginEmpId");
+        const empIdError = document.getElementById("empIdError");
+        const empIdErrorMsg = document.getElementById("empIdErrorMsg");
+
+        const enteredEmpId = empIdInput ? empIdInput.value.trim() : "";
+        if (!enteredEmpId) {
+            if (empIdError) { empIdErrorMsg.innerText = "Please enter your Employee ID before signing in."; empIdError.style.display = "block"; }
+            if (empIdInput) empIdInput.focus();
+            return;
+        }
+        if (empIdError) empIdError.style.display = "none";
+
+        // Store for verification after MS login
+        window._loginEnteredEmpId = enteredEmpId;
+        window._loginEnteredPassword = "";
     }
-    if (empIdError) empIdError.style.display = "none";
-
-    // Store for verification after MS login
-    window._loginEnteredEmpId = enteredEmpId;
 
     errEl.style.display = "none";
     btn.disabled = true;
@@ -1180,7 +1344,7 @@ async function startMsLogin() {
         statusEl.innerText = "";
     } finally {
         btn.disabled = false;
-        btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 21 21"><rect x="1" y="1" width="9" height="9" fill="#f25022"/><rect x="11" y="1" width="9" height="9" fill="#7fba00"/><rect x="1" y="11" width="9" height="9" fill="#00a4ef"/><rect x="11" y="11" width="9" height="9" fill="#ffb900"/></svg> Sign in with Microsoft 365';
+        _resetMsSignInBtn();
     }
 }
 
@@ -1210,6 +1374,8 @@ async function completeMsLogin() {
         }
 
         // ── Verify Employee ID matches the one registered by IT
+        //    (skipped once this device is in Password mode — see finishAuthorizedLogin)
+        if (!isPasswordModeActive()) {
         const enteredEmpId = (window._loginEnteredEmpId || "").trim().toUpperCase();
         const registeredEmpId = String(item.EmpID || "").trim().toUpperCase();
         if (!enteredEmpId || enteredEmpId !== registeredEmpId) {
@@ -1222,9 +1388,9 @@ async function completeMsLogin() {
                 const accounts = msalApp.getAllAccounts();
                 if (accounts.length > 0) await msalApp.logoutPopup({ account: accounts[0] }).catch(() => {});
             } catch(e) {}
-            const msBtn = document.getElementById("msSignInBtn");
-            if (msBtn) msBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 21 21"><rect x="1" y="1" width="9" height="9" fill="#f25022"/><rect x="11" y="1" width="9" height="9" fill="#7fba00"/><rect x="1" y="11" width="9" height="9" fill="#00a4ef"/><rect x="11" y="11" width="9" height="9" fill="#ffb900"/></svg> Sign in with Microsoft 365';
+            _resetMsSignInBtn();
             return;
+        }
         }
 
         const mgrStatus = String(item.ManagerStatus || "").toUpperCase();
@@ -1268,26 +1434,13 @@ async function completeMsLogin() {
         // IP matched — update display
         if (ipLine) ipLine.innerHTML = '<i class="fas fa-check-circle" style="color:#10b981"></i> <span style="color:#10b981">IP Matched: </span><span style="color:#fff">' + detectedIP + '</span>';
 
-        // ── CASE 1: Already IT-authorized → launch app directly
+        // ── CASE 1: Already IT-authorized → verify password (or set one up first time)
         if (wsStatus === "AUTHORIZED") {
-            pendingEmpId = item.EmpID || email;
-            currentUser = {
-                name:    item.EmpName || me.displayName || email,
-                branch:  item.Branch  || "",
-                post:    item.Post    || "",
-                empCode: item.EmpID   || email
-            };
-            const sigKey = "sig_" + currentUser.empCode;
-            if (item.SignatureRevoked === true || String(item.SignatureRevoked || "") === "true") {
-                localStorage.removeItem(sigKey);
-            }
-            currentUser.savedSig = localStorage.getItem(sigKey) || null;
             try {
                 await _logJourney(item.Branch, item.EmpID, item.EmpName, item.Post, currentIP || "",
                     "AUTHORIZED", "MS365_LOGIN", "Branch manager signed in via Microsoft 365.");
             } catch(e) {}
-            document.getElementById("authOverlay").style.display = "none";
-            launchMainApp();
+            await finishAuthorizedLogin(item, me.displayName || email);
             return;
         }
 
@@ -1438,24 +1591,11 @@ async function checkITAuthorizationNew() {
             if (statusEl) statusEl.innerHTML = '<i class="fas fa-check-circle" style="color:#10b981"></i> <span style="color:#10b981">IT has authorized your workstation!</span>';
             await new Promise(r => setTimeout(r, 1000));
 
-            pendingEmpId = item.EmpID || _pendingEmail;
-            currentUser = {
-                name:    item.EmpName || (_pendingMe && _pendingMe.displayName) || _pendingEmail,
-                branch:  item.Branch  || "",
-                post:    item.Post    || "",
-                empCode: item.EmpID   || _pendingEmail
-            };
-            const sigKey = "sig_" + currentUser.empCode;
-            if (item.SignatureRevoked === true || String(item.SignatureRevoked || "") === "true") {
-                localStorage.removeItem(sigKey);
-            }
-            currentUser.savedSig = localStorage.getItem(sigKey) || null;
             try {
                 await _logJourney(item.Branch, item.EmpID, item.EmpName, item.Post, currentIP || "",
                     "AUTHORIZED", "WORKSTATION_APPROVED", "IT authorized the workstation. App launched.");
             } catch(e) {}
-            document.getElementById("authOverlay").style.display = "none";
-            launchMainApp();
+            await finishAuthorizedLogin(item, (_pendingMe && _pendingMe.displayName) || _pendingEmail);
         } else {
             if (statusEl) statusEl.innerHTML = '<i class="fas fa-clock" style="color:#fbbf24"></i> <span style="color:#fbbf24">Still pending — IT has not approved yet. Please wait and try again.</span>';
             if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-sync-alt"></i> Check IT Authorization'; }
