@@ -2019,72 +2019,64 @@ const notConfigured = !SCRIPT_URL || SCRIPT_URL === "YOUR_APPS_SCRIPT_URL";
 // ════════════════════════════════════════════════════
 //  MSAL / AZURE AD CONFIGURATION
 // ════════════════════════════════════════════════════
-// ── Remote config loader — credentials stored in SharePoint ──────────────
-let SP_CONFIG = null;  // populated after remote fetch
+// ── Remote config loader — credentials stored in SharePoint, NOT in this file ──
+let SP_CONFIG = null;  // populated after remote fetch, before MSAL is initialised
 
 const CONFIG_JS_URL =
   "https://godavariurban.sharepoint.com/sites/projectmanager/SiteAssets/config.js";
 
 async function loadRemoteConfig() {
-  // If already loaded (e.g. cached in sessionStorage), skip fetch
+  // If already loaded this session (e.g. cached in sessionStorage), skip the fetch
   try {
     const cached = sessionStorage.getItem("pm_remote_config");
     if (cached) {
       SP_CONFIG = JSON.parse(cached);
+      console.log("✅ Remote config loaded from session cache");
       return true;
     }
-  } catch {}
+  } catch (e) { /* ignore — fall through to fetch */ }
 
   try {
     const res = await fetch(CONFIG_JS_URL, {
       cache: "no-store",
-      credentials: "include"   // sends SharePoint session cookie
+      credentials: "include"   // sends the user's existing SharePoint session cookie
     });
 
     if (!res.ok) throw new Error(`Config fetch failed: HTTP ${res.status}`);
 
     const scriptText = await res.text();
 
-    // Execute the script text safely in a sandboxed scope
+    // Execute the fetched script text to read window.PM_REMOTE_CONFIG safely
     const fn = new Function(scriptText + "; return window.PM_REMOTE_CONFIG;");
     const cfg = fn();
 
-    if (!cfg || !cfg.clientId || !cfg.siteUrl) {
-      throw new Error("Config loaded but missing required fields");
+    if (!cfg || !cfg.clientId || !cfg.tenantId || !cfg.siteUrl) {
+      throw new Error("config.js loaded but is missing required fields (clientId / tenantId / siteUrl)");
     }
 
     SP_CONFIG = cfg;
 
-    // Cache for this browser session (clears on tab close)
-    sessionStorage.setItem("pm_remote_config", JSON.stringify(SP_CONFIG));
+    // Cache for this browser session only (clears automatically on tab close)
+    try { sessionStorage.setItem("pm_remote_config", JSON.stringify(SP_CONFIG)); } catch (e) {}
 
     console.log("✅ Remote config loaded from SharePoint");
     return true;
   } catch (err) {
     console.error("❌ Could not load remote config:", err);
-    // Fallback: show an error message to the user
-    const loginScreen = document.getElementById("loginScreen");
-    if (loginScreen) {
-      const errDiv = document.getElementById("loginError");
-      if (errDiv) {
-        errDiv.textContent =
-          "⚠️ Could not load application configuration. " +
-          "Please ensure you are connected to the organisation network and refresh.";
-        errDiv.style.display = "block";
-      }
+    const errDiv = document.getElementById("loginError");
+    if (errDiv) {
+      errDiv.textContent =
+        "⚠️ Could not load application configuration (" + err.message + "). " +
+        "Make sure config.js exists at the SharePoint Site Assets URL and you are connected to the organisation network, then refresh.";
+      errDiv.style.display = "block";
     }
     return false;
   }
 }
 
-const _msalConfig = {
-  auth: {
-    clientId:    SP_CONFIG.clientId,
-    authority:   `https://login.microsoftonline.com/${SP_CONFIG.tenantId}`,
-    redirectUri: window.location.origin + window.location.pathname, // dynamic — works on any host
-  },
-  cache: { cacheLocation: "sessionStorage" }
-};
+// _msalConfig is built ONLY after loadRemoteConfig() succeeds — never reference
+// SP_CONFIG here at parse time, since it starts out as null.
+let _msalConfig = null;
 
 const _msalLoginRequest = {
   scopes: ["User.Read", "Sites.ReadWrite.All"],
@@ -2193,6 +2185,30 @@ async function initMsal() {
   const btn = document.getElementById("msal-signin-btn");
   const status = document.getElementById("msal-status");
   if(!btn) { console.warn("MSAL: signin btn not found, retrying..."); setTimeout(initMsal, 200); return; }
+
+  // ── Step 1: fetch clientId / tenantId / siteUrl / list names from SharePoint ──
+  if(!SP_CONFIG) {
+    if(status) status.textContent = "⏳ Loading configuration…";
+    const ok = await loadRemoteConfig();
+    if(!ok) {
+      btn.disabled = false;
+      if(status) status.textContent = "⚠ Could not load configuration — see message above.";
+      return; // cannot proceed without SP_CONFIG
+    }
+  }
+
+  // ── Step 2: build _msalConfig now that SP_CONFIG is guaranteed to exist ──
+  if(!_msalConfig) {
+    _msalConfig = {
+      auth: {
+        clientId:    SP_CONFIG.clientId,
+        authority:   `https://login.microsoftonline.com/${SP_CONFIG.tenantId}`,
+        redirectUri: window.location.origin + window.location.pathname, // dynamic — works on any host
+      },
+      cache: { cacheLocation: "sessionStorage" }
+    };
+  }
+
   const safetyTimer = setTimeout(() => {
     if (!_msalReady) {
       _msalReady = true;
