@@ -2019,20 +2019,63 @@ const notConfigured = !SCRIPT_URL || SCRIPT_URL === "YOUR_APPS_SCRIPT_URL";
 // ════════════════════════════════════════════════════
 //  MSAL / AZURE AD CONFIGURATION
 // ════════════════════════════════════════════════════
-const SP_CONFIG = {
-  clientId:  "106f2386-db75-436c-8e08-21c2ea14958e",
-  tenantId:  "e47e4128-1c1b-4510-a440-415145dc1cde",
-  siteUrl:   "https://godavariurban.sharepoint.com/sites/GUMCCSLFDCOMMISTION",
-  lists: {
-    projects:  "PM_Projects",
-    checklist: "PM_Checklist",
-    meetings:  "PM_Meetings",
-    notes:     "PM_Notes",
-    docs:      "PM_Docs",
-    naissance: "PM_Naissance",
-    users:     "PM_Users"
+// ── Remote config loader — credentials stored in SharePoint ──────────────
+let SP_CONFIG = null;  // populated after remote fetch
+
+const CONFIG_JS_URL =
+  "https://godavariurban.sharepoint.com/sites/projectmanager/SiteAssets/config.js";
+
+async function loadRemoteConfig() {
+  // If already loaded (e.g. cached in sessionStorage), skip fetch
+  try {
+    const cached = sessionStorage.getItem("pm_remote_config");
+    if (cached) {
+      SP_CONFIG = JSON.parse(cached);
+      return true;
+    }
+  } catch {}
+
+  try {
+    const res = await fetch(CONFIG_JS_URL, {
+      cache: "no-store",
+      credentials: "include"   // sends SharePoint session cookie
+    });
+
+    if (!res.ok) throw new Error(`Config fetch failed: HTTP ${res.status}`);
+
+    const scriptText = await res.text();
+
+    // Execute the script text safely in a sandboxed scope
+    const fn = new Function(scriptText + "; return window.PM_REMOTE_CONFIG;");
+    const cfg = fn();
+
+    if (!cfg || !cfg.clientId || !cfg.siteUrl) {
+      throw new Error("Config loaded but missing required fields");
+    }
+
+    SP_CONFIG = cfg;
+
+    // Cache for this browser session (clears on tab close)
+    sessionStorage.setItem("pm_remote_config", JSON.stringify(SP_CONFIG));
+
+    console.log("✅ Remote config loaded from SharePoint");
+    return true;
+  } catch (err) {
+    console.error("❌ Could not load remote config:", err);
+    // Fallback: show an error message to the user
+    const loginScreen = document.getElementById("loginScreen");
+    if (loginScreen) {
+      const errDiv = document.getElementById("loginError");
+      if (errDiv) {
+        errDiv.textContent =
+          "⚠️ Could not load application configuration. " +
+          "Please ensure you are connected to the organisation network and refresh.";
+        errDiv.style.display = "block";
+      }
+    }
+    return false;
   }
-};
+}
 
 const _msalConfig = {
   auth: {
