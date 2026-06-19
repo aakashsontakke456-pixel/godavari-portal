@@ -739,8 +739,26 @@ body { font-family: 'Plus Jakarta Sans', sans-serif; background: var(--bg); colo
 .checklist-item.done .check-box { background:var(--success); border-color:var(--success); }
 .check-tick { color:#fff; font-size:11px; display:none; }
 .checklist-item.done .check-tick { display:block; }
+.custom-item-row.done .check-box { background:var(--success); border-color:var(--success); }
+.custom-item-row.done .check-tick { display:block; }
 .item-text { font-size:13px; line-height:1.4; flex:1; }
 .checklist-item.done .item-text { text-decoration:line-through; color:var(--text3); }
+.custom-checklist-tools { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:14px 18px; margin-bottom:14px; border:1.5px solid var(--border); border-radius:14px; background:linear-gradient(135deg,#f8fbff,#eef7f2); box-shadow:var(--shadow); }
+.custom-checklist-title { font-size:13px; font-weight:800; color:var(--text); }
+.custom-checklist-sub { font-size:11px; color:var(--text3); margin-top:2px; }
+.custom-checklist-actions { display:flex; align-items:center; gap:8px; flex-wrap:wrap; justify-content:flex-end; }
+.btn-custom-checklist { border:none; border-radius:8px; padding:8px 12px; font-size:12px; font-weight:800; cursor:pointer; background:#1f7a2d; color:#fff; transition:all .18s; }
+.btn-custom-checklist:hover { transform:translateY(-1px); box-shadow:0 5px 14px rgba(31,122,45,.22); }
+.btn-custom-checklist.secondary { background:var(--surface); color:var(--text2); border:1.5px solid var(--border); box-shadow:none; }
+.custom-phase-edit { display:grid; grid-template-columns:minmax(120px,180px) 1fr auto; gap:8px; align-items:center; width:100%; }
+.custom-phase-edit input, .custom-item-input { width:100%; min-width:0; border:1.5px solid var(--border); border-radius:8px; padding:8px 10px; font:inherit; font-size:12px; color:var(--text); background:var(--bg); outline:none; }
+.custom-phase-edit input:focus, .custom-item-input:focus { border-color:var(--accent); background:#fff; box-shadow:0 0 0 3px rgba(79,110,247,.1); }
+.custom-phase-delete, .custom-item-delete { border:none; border-radius:7px; width:30px; height:30px; cursor:pointer; background:#fee2e2; color:#dc2626; font-weight:900; }
+.custom-item-row { display:grid; grid-template-columns:20px minmax(0,1fr) auto; gap:12px; align-items:center; padding:10px 20px; border-bottom:1px solid var(--border); }
+.custom-item-row.done { opacity:.7; }
+.custom-item-row.done .custom-item-input { text-decoration:line-through; color:var(--text3); }
+.custom-add-item { margin:12px 20px; border:1.5px dashed var(--border2); border-radius:10px; background:var(--surface2); color:var(--text2); padding:10px 12px; font-size:12px; font-weight:800; cursor:pointer; width:calc(100% - 40px); }
+.custom-add-item:hover { border-color:var(--accent); color:var(--accent); background:var(--accent-light); }
 
 /* ══════════════ GANTT ══════════════ */
 .gantt-wrap { background:var(--surface); border:1.5px solid var(--border); border-radius:18px; padding:22px; box-shadow:var(--shadow); overflow-x:auto; }
@@ -1698,7 +1716,7 @@ body.dark-mode .btn-edit-proj:hover { color: #fff; }
           <div class="detail-topbar-actions">
             <button class="btn-edit-proj admin-only" id="editProjBtn" onclick="openEditProject(currentPID)">✏️ Edit Project</button>
             <button class="btn-docs" id="docsBtn" onclick="openDocsModal()">📄 Docs <span class="doc-count-badge" id="docCountBadge">0</span></button>
-            <button class="btn-docs" id="naissanceBtn" style="border-color:#1a4731;color:#1a4731;background:rgba(26,71,49,.07);" onclick="openNaissanceModal(currentPID)" title="Naissance Project Checklist">📋 Naissance Checklist</button>
+            <button class="btn-docs" id="naissanceBtn" style="border-color:#1a4731;color:#1a4731;background:rgba(26,71,49,.07);" onclick="openNaissanceModal(currentPID)" title="Project Checklist">📋 Project Checklist</button>
             <button class="btn-docs" id="deckGanttBtn" style="border-color:#1f5f9e;color:#1f5f9e;background:rgba(31,95,158,.07);" onclick="openDeckGanttModal(currentPID)" title="Editable Project Gantt Chart">📊 Editable Gantt</button>
             <button class="btn-report" onclick="exportProjectReport(currentPID)">📊 Export PDF Report</button>
           </div>
@@ -1830,11 +1848,11 @@ body.dark-mode .btn-edit-proj:hover { color: #fff; }
 <div class="modal-overlay" id="modalOverlay">
   <div class="modal">
     <div class="modal-title">New Project</div>
-    <div class="modal-sub">Fill in details — a 59-item phase checklist will be auto-created</div>
+    <div class="modal-sub">Fill in details — a phase checklist will be auto-created. Choose Other Project for an editable checklist.</div>
     <div class="form-grid">
       <div class="form-field full"><label>Project Name *</label><input type="text" id="fName" placeholder="e.g. HR Portal App"></div>
       <div class="form-field full"><label>Description</label><textarea id="fDesc" placeholder="Brief description..."></textarea></div>
-      <div class="form-field"><label>App Type</label><select id="fType"><option>Canvas App</option><option>Model-Driven</option><option>Power Pages</option><option>Power Automate</option><option>Mixed</option></select></div>
+      <div class="form-field"><label>App Type</label><select id="fType"><option>Canvas App</option><option>Model-Driven</option><option>Power Pages</option><option>Power Automate</option><option>Mixed</option><option>Other Project</option></select></div>
       <div class="form-field">
         <label>Status <span style="font-size:9px;background:#ecfdf5;color:#10b981;padding:2px 8px;border-radius:20px;font-weight:700;margin-left:4px;letter-spacing:.5px;">AUTO</span></label>
         <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:#eef1fe;border:1.5px solid #4f6ef7;border-radius:9px;cursor:default;user-select:none;">
@@ -2001,7 +2019,43 @@ const CL = [
   {n:9,name:"Post-Deployment",sub:"Monitoring, bugs & analytics",items:["Monitor app performance","Track user issues","Fix production bugs","Backup data strategy","Logs/usage analytics reviewed"]},
   {n:10,name:"Enhancement",sub:"Feedback, UI & future versions",items:["User feedback collected","UI improvements identified","New features planned","Performance optimizations done","Version upgrade planned"]}
 ];
-const TOTAL = CL.reduce((s,p)=>s+p.items.length,0);
+const OTHER_PROJECT_TYPE = "Other Project";
+
+function cloneDefaultChecklist() {
+  return CL.map(p => ({ n:p.n, name:p.name, sub:p.sub || "", items:[...p.items] }));
+}
+
+function isOtherProject(p) {
+  return !!p && p.type === OTHER_PROJECT_TYPE;
+}
+
+function normalizeChecklistTemplate(raw) {
+  const source = Array.isArray(raw) && raw.length ? raw : cloneDefaultChecklist();
+  return source.map((p, idx) => ({
+    n: Number(p.n) || idx + 1,
+    name: String(p.name || `Phase ${idx + 1}`).trim() || `Phase ${idx + 1}`,
+    sub: String(p.sub || "").trim(),
+    items: Array.isArray(p.items) && p.items.length ? p.items.map(item => String(item || "Checklist item").trim() || "Checklist item") : ["Checklist item"]
+  }));
+}
+
+function getChecklistTemplate(pid) {
+  const p = getProjects().find(q => q.id === pid);
+  if(isOtherProject(p)) {
+    if(!Array.isArray(p.customChecklist) || !p.customChecklist.length) p.customChecklist = cloneDefaultChecklist();
+    p.customChecklist = normalizeChecklistTemplate(p.customChecklist);
+    return p.customChecklist;
+  }
+  return CL;
+}
+
+function getChecklistTotal(pid) {
+  return getChecklistTemplate(pid).reduce((s,p)=>s+p.items.length,0);
+}
+
+function getPhaseByNum(pid, phaseNum) {
+  return getChecklistTemplate(pid).find(p => p.n === phaseNum);
+}
 
 // ── PASTE YOUR APPS SCRIPT WEB APP URL BELOW ──────────────────────────────
 /* AbortSignal.timeout() polyfill — avoids DataCloneError in some browsers */
@@ -2531,7 +2585,7 @@ function applyDB(db, silent) {
   if(!changed) return;
   refreshAllViews();
   if(currentPID) {
-    CL.forEach(phase => {
+    getChecklistTemplate(currentPID).forEach(phase => {
       const logEl = document.getElementById("meeting-log-"+phase.n);
       if(logEl) logEl.innerHTML = renderMeetingLogHTML(currentPID, phase.n);
       const hd = document.getElementById("meeting-hd-"+phase.n);
@@ -2751,7 +2805,7 @@ async function spUpsert(listName, title, fields) {
 ══════════════════════════════════════════════════════════════ */
 
 function projectToSP(p) {
-  return {
+  const fields = {
     ProjectName:  p.name  || "",
     Description:  p.desc  || "",
     AppType:      p.type  || "Canvas App",
@@ -2765,10 +2819,18 @@ function projectToSP(p) {
     SpUrl:        p.spUrl || "",
     CreatedAt:    p.createdAt || new Date().toISOString()
   };
+  if(isOtherProject(p) && Array.isArray(p.customChecklist)) {
+    fields.CustomChecklistJson = JSON.stringify(normalizeChecklistTemplate(p.customChecklist));
+  }
+  return fields;
 }
 
 function spToProject(f) {
-  return {
+  let customChecklist = null;
+  if(f.CustomChecklistJson) {
+    try { customChecklist = normalizeChecklistTemplate(JSON.parse(f.CustomChecklistJson)); } catch(e) { customChecklist = null; }
+  }
+  const project = {
     id:        f.Title,
     name:      f.ProjectName  || f.Title,
     desc:      f.Description  || "",
@@ -2783,6 +2845,8 @@ function spToProject(f) {
     spUrl:     f.SpUrl        || "",
     createdAt: f.CreatedAt    || ""
   };
+  if(project.type === OTHER_PROJECT_TYPE) project.customChecklist = customChecklist || cloneDefaultChecklist();
+  return project;
 }
 
 /* ── Pull from SharePoint ── */
@@ -3272,7 +3336,8 @@ function hasLeaderProject() {
 ═══════════════════════════════════════════ */
 function calcProg(pid) {
   const cl = getCL(pid), done = Object.values(cl).filter(Boolean).length;
-  return { done, total:TOTAL, pct: Math.round(done/TOTAL*100) };
+  const total = getChecklistTotal(pid);
+  return { done, total, pct: total ? Math.round(done/total*100) : 0 };
 }
 
 /* Auto-compute project status based on checklist phase completions.
@@ -3283,11 +3348,14 @@ function calcProg(pid) {
      Phase 8 =100%          → Deployed
    "On Hold" is only set manually and preserved unless checklist advances past it. */
 function computeAutoStatus(pid) {
+  const proj = _projects.find(p => p.id === pid);
   const cl = getCL(pid);
   const g = calcProg(pid);
   if (g.done === 0) return "Planning";
-  const phase6 = CL.find(p => p.n === 6);
-  const phase8 = CL.find(p => p.n === 8);
+  if(isOtherProject(proj)) return g.pct === 100 ? "Deployed" : "In Progress";
+  const phase6 = getPhaseByNum(pid, 6);
+  const phase8 = getPhaseByNum(pid, 8);
+  if(!phase6 || !phase8) return g.pct === 100 ? "Deployed" : "In Progress";
   const p6done = phase6.items.filter((_, i) => cl[`6_${i}`]).length;
   const p8done = phase8.items.filter((_, i) => cl[`8_${i}`]).length;
   if (p8done === phase8.items.length) return "Deployed";
@@ -3609,10 +3677,11 @@ async function saveProject() {
   if(!name){ showToast("⚠️ Project name required!"); return; }
   // Get selected leader name
   const leaderPerson = _slSelected ? _people.find(p => p.u === _slSelected) : null;
+  const projectType = document.getElementById("fType").value;
   const p = {
     id:"p_"+Date.now(), name,
     desc:     document.getElementById("fDesc").value.trim(),
-    type:     document.getElementById("fType").value,
+    type:     projectType,
     status:   "Planning",
     priority: document.getElementById("fPriority").value,
     env:      document.getElementById("fEnv").value,
@@ -3623,6 +3692,7 @@ async function saveProject() {
     spUrl:    document.getElementById("fSPUrl").value.trim(),
     createdAt:new Date().toISOString()
   };
+  if(projectType === OTHER_PROJECT_TYPE) p.customChecklist = cloneDefaultChecklist();
   _projects.push(p);
   closeModal();
   document.getElementById("fName").value="";
@@ -3775,7 +3845,7 @@ function openProject(pid) {
       <span class="big-progress-pct">${g.pct}%</span>
     </div>
     <div class="big-progress-bg"><div class="big-progress-fill ${full?"full":""}" style="width:${g.pct}%"></div></div>
-    <div style="margin-top:8px;font-size:12px;color:var(--text3)">${g.done} of ${g.total} tasks completed across 10 phases</div>`;
+    <div style="margin-top:8px;font-size:12px;color:var(--text3)">${g.done} of ${g.total} tasks completed across ${getChecklistTemplate(pid).length} phases</div>`;
   renderProjectGantt(pid, p);
   renderChecklist(pid);
   updateDocCountBadge(pid);
@@ -3793,7 +3863,8 @@ function renderProjectGantt(pid, p) {
   const startD = p.start ? new Date(p.start) : new Date();
   const endD = p.target ? new Date(p.target) : new Date(startD.getTime() + 90*24*60*60*1000);
   const totalMs = endD - startD || 1;
-  const phaseCount = CL.length;
+  const phases = getChecklistTemplate(pid);
+  const phaseCount = phases.length || 1;
   const phaseMs = totalMs / phaseCount;
   const today = new Date(); today.setHours(0,0,0,0);
   const todayPct = Math.min(100, Math.max(0, ((today-startD)/totalMs)*100));
@@ -3808,7 +3879,7 @@ function renderProjectGantt(pid, p) {
     <th style="text-align:center;min-width:50px;font-size:10px;font-weight:700;color:#9aa0b8;padding:8px 4px;border-bottom:1.5px solid #e2e6f0;background:#f5f6fa">Done</th>
     <th style="text-align:center;min-width:55px;font-size:10px;font-weight:700;color:#9aa0b8;padding:8px 4px;border-bottom:1.5px solid #e2e6f0;background:#f5f6fa">${mLabels}</th>
   </tr></thead><tbody>`;
-  CL.forEach((phase, i) => {
+  phases.forEach((phase, i) => {
     const pd = phase.items.filter((_,j) => cl[`${phase.n}_${j}`]).length;
     const pp = Math.round(pd/phase.items.length*100);
     const phStart = new Date(startD.getTime() + i*phaseMs);
@@ -3877,7 +3948,7 @@ function saveMeetingsForPhase(pid, phaseNum, arr) {
 function openMeetingModal(pid, phaseNum) {
   if(currentUser && currentUser.role === "authority") return;
   _meetingPID = pid; _meetingPhaseNum = phaseNum;
-  const phase = CL.find(p => p.n === phaseNum);
+  const phase = getPhaseByNum(pid, phaseNum);
   document.getElementById("meetingModalTag").textContent = "📌 Phase " + phaseNum + " — " + (phase ? phase.name : "");
   document.getElementById("mDate").value = new Date().toISOString().split("T")[0];
   document.getElementById("mDuration").value = "";
@@ -3937,7 +4008,20 @@ async function deleteMeeting(pid, phaseNum, meetingId) {
 function renderChecklist(pid) {
   const cl = getCL(pid);
   const canEdit = canEditProjectId(pid);
-  document.getElementById("checklistContainer").innerHTML = CL.map(phase => {
+  const project = getProjects().find(p => p.id === pid);
+  const phases = getChecklistTemplate(pid);
+  const customEditable = canEdit && isOtherProject(project);
+  const toolsHtml = isOtherProject(project) ? `<div class="custom-checklist-tools">
+    <div>
+      <div class="custom-checklist-title">Project Checklist Template</div>
+      <div class="custom-checklist-sub">${customEditable ? "Edit phase names and checklist points for this project only." : "Custom checklist for this project."}</div>
+    </div>
+    ${customEditable ? `<div class="custom-checklist-actions">
+      <button class="btn-custom-checklist secondary" onclick="resetOtherProjectChecklist('${pid}')">Use default phases</button>
+      <button class="btn-custom-checklist" onclick="addCustomPhase('${pid}')">+ Add phase</button>
+    </div>` : ""}
+  </div>` : "";
+  document.getElementById("checklistContainer").innerHTML = toolsHtml + phases.map(phase => {
     const pd = phase.items.filter((_,i)=>cl[`${phase.n}_${i}`]).length;
     const pp = Math.round(pd/phase.items.length*100), full = pp===100;
     const pMeetings = getMeetingsForPhase(pid, phase.n);
@@ -3945,7 +4029,11 @@ function renderChecklist(pid) {
       <div class="phase-header" onclick="togglePhase(${phase.n})">
         <div class="phase-header-left">
           <div class="phase-num">${phase.n}</div>
-          <div><div class="phase-title">${phase.name}</div><div class="phase-subtitle">${phase.sub}</div></div>
+          ${customEditable ? `<div class="custom-phase-edit" onclick="event.stopPropagation()">
+            <input value="${x(phase.name)}" placeholder="Phase name" oninput="updateCustomPhase('${pid}',${phase.n},'name',this.value)">
+            <input value="${x(phase.sub || "")}" placeholder="Short phase description" oninput="updateCustomPhase('${pid}',${phase.n},'sub',this.value)">
+            <button class="custom-phase-delete" onclick="deleteCustomPhase('${pid}',${phase.n})" title="Delete phase">×</button>
+          </div>` : `<div><div class="phase-title">${x(phase.name)}</div><div class="phase-subtitle">${x(phase.sub || "")}</div></div>`}
         </div>
         <div class="phase-header-right">
           <span class="phase-count">${pd}/${phase.items.length}</span>
@@ -3956,11 +4044,17 @@ function renderChecklist(pid) {
       <div class="phase-items">
         ${phase.items.map((item,i)=>{
           const key=`${phase.n}_${i}`, done=!!cl[key];
+          if(customEditable) return `<div class="custom-item-row ${done?"done":""}">
+            <div class="check-box" onclick="toggleItem('${pid}','${key}',this.closest('.custom-item-row'))"><span class="check-tick">✓</span></div>
+            <input class="custom-item-input" value="${x(item)}" oninput="updateCustomItem('${pid}',${phase.n},${i},this.value)" placeholder="Checklist point">
+            <button class="custom-item-delete" onclick="deleteCustomItem('${pid}',${phase.n},${i})" title="Delete item">×</button>
+          </div>`;
           return `<div class="checklist-item ${done?"done":""}" ${canEdit?`onclick="toggleItem('${pid}','${key}',this)"`:"style='cursor:default'"}>
             <div class="check-box"><span class="check-tick">✓</span></div>
             <span class="item-text">${x(item)}</span>
           </div>`;
         }).join("")}
+        ${customEditable ? `<button class="custom-add-item" onclick="addCustomItem('${pid}',${phase.n})">+ Add checklist point</button>` : ""}
         <div class="phase-meeting-section">
           <div class="phase-meeting-header">
             <div class="phase-meeting-title" id="meeting-hd-${phase.n}">📝 Meeting Log <span class="meeting-count-chip">${pMeetings.length}</span></div>
@@ -3976,6 +4070,88 @@ function renderChecklist(pid) {
   }).join("");
 }
 
+function persistCustomChecklistChange(pid, rerender) {
+  const p = getProjects().find(q => q.id === pid);
+  if(!isOtherProject(p)) return;
+  p.customChecklist = normalizeChecklistTemplate(p.customChecklist);
+  savePL(_projects);
+  if(rerender) renderChecklist(pid);
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(()=>pushAll(), 650);
+}
+
+function updateCustomPhase(pid, phaseNum, field, value) {
+  if(!canEditProjectId(pid)) return;
+  const p = getProjects().find(q => q.id === pid);
+  if(!isOtherProject(p)) return;
+  const phase = getChecklistTemplate(pid).find(ph => ph.n === phaseNum);
+  if(!phase) return;
+  phase[field] = value;
+  persistCustomChecklistChange(pid, false);
+}
+
+function updateCustomItem(pid, phaseNum, itemIndex, value) {
+  if(!canEditProjectId(pid)) return;
+  const p = getProjects().find(q => q.id === pid);
+  if(!isOtherProject(p)) return;
+  const phase = getChecklistTemplate(pid).find(ph => ph.n === phaseNum);
+  if(!phase || !phase.items[itemIndex]) return;
+  phase.items[itemIndex] = value;
+  persistCustomChecklistChange(pid, false);
+}
+
+function addCustomPhase(pid) {
+  if(!canEditProjectId(pid)) return;
+  const p = getProjects().find(q => q.id === pid);
+  if(!isOtherProject(p)) return;
+  const phases = getChecklistTemplate(pid);
+  const nextN = phases.reduce((m, ph) => Math.max(m, ph.n || 0), 0) + 1;
+  phases.push({ n:nextN, name:"New Phase", sub:"Project-specific work", items:["New checklist point"] });
+  persistCustomChecklistChange(pid, true);
+}
+
+function deleteCustomPhase(pid, phaseNum) {
+  if(!canEditProjectId(pid)) return;
+  const p = getProjects().find(q => q.id === pid);
+  if(!isOtherProject(p)) return;
+  if(getChecklistTemplate(pid).length <= 1) { showToast("⚠️ Keep at least one phase"); return; }
+  if(!confirm("Delete this phase and its checklist progress?")) return;
+  p.customChecklist = getChecklistTemplate(pid).filter(ph => ph.n !== phaseNum);
+  const cl = getCL(pid);
+  Object.keys(cl).forEach(k => { if(k.startsWith(phaseNum + "_")) delete cl[k]; });
+  saveCL(pid, cl);
+  persistCustomChecklistChange(pid, true);
+}
+
+function addCustomItem(pid, phaseNum) {
+  if(!canEditProjectId(pid)) return;
+  const phase = getPhaseByNum(pid, phaseNum);
+  if(!phase) return;
+  phase.items.push("New checklist point");
+  persistCustomChecklistChange(pid, true);
+}
+
+function deleteCustomItem(pid, phaseNum, itemIndex) {
+  if(!canEditProjectId(pid)) return;
+  const phase = getPhaseByNum(pid, phaseNum);
+  if(!phase) return;
+  if(phase.items.length <= 1) { showToast("⚠️ Keep at least one checklist point"); return; }
+  phase.items.splice(itemIndex, 1);
+  const cl = getCL(pid);
+  delete cl[`${phaseNum}_${itemIndex}`];
+  saveCL(pid, cl);
+  persistCustomChecklistChange(pid, true);
+}
+
+function resetOtherProjectChecklist(pid) {
+  if(!canEditProjectId(pid)) return;
+  const p = getProjects().find(q => q.id === pid);
+  if(!isOtherProject(p)) return;
+  if(!confirm("Reset this project's phases and checklist points to the default list? Existing tick progress will stay where keys still match.")) return;
+  p.customChecklist = cloneDefaultChecklist();
+  persistCustomChecklistChange(pid, true);
+}
+
 function togglePhase(n) { document.getElementById("ph_"+n).classList.toggle("expanded"); }
 
 async function toggleItem(pid, key, el) {
@@ -3983,7 +4159,8 @@ async function toggleItem(pid, key, el) {
   const cl = getCL(pid); cl[key] = !cl[key]; saveCL(pid, cl);
   el.classList.toggle("done", cl[key]);
   const pn = parseInt(key.split("_")[0]);
-  const phase = CL.find(p=>p.n===pn);
+  const phase = getPhaseByNum(pid, pn);
+  if(!phase) return;
   const pd = phase.items.filter((_,i)=>cl[`${pn}_${i}`]).length;
   const pp = Math.round(pd/phase.items.length*100);
   const blk = document.getElementById("ph_"+pn);
@@ -3998,7 +4175,7 @@ async function toggleItem(pid, key, el) {
   const bps = document.querySelector("#bigProgress div:last-child");
   if(bpf){bpf.style.width=g.pct+"%";bpf.classList.toggle("full",g.pct===100);}
   if(bpp) bpp.textContent=g.pct+"%";
-  if(bps) bps.textContent=`${g.done} of ${g.total} tasks completed across 10 phases`;
+  if(bps) bps.textContent=`${g.done} of ${g.total} tasks completed across ${getChecklistTemplate(pid).length} phases`;
 
   // ── Auto-update project status based on checklist progression ──
   const statusChanged = updateProjectStatus(pid);
@@ -4035,7 +4212,7 @@ function exportCSV() {
   csv+="\nProject,Phase,Item,Status\n";
   ps.forEach(p=>{
     const cl=getCL(p.id);
-    CL.forEach(ph=>ph.items.forEach((item,i)=>{
+    getChecklistTemplate(p.id).forEach(ph=>ph.items.forEach((item,i)=>{
       csv+=`"${p.name}","${ph.name}","${item}",${cl[`${ph.n}_${i}`]?"Done":"Pending"}\n`;
     }));
   });
@@ -4067,14 +4244,15 @@ function exportProjectReport(pid) {
 
   // Total meeting stats
   let totalMeetings = 0, totalMeetingHours = 0;
-  CL.forEach(ph => {
+  const phases = getChecklistTemplate(pid);
+  phases.forEach(ph => {
     const ms = getMeetingsForPhase(pid, ph.n);
     totalMeetings += ms.length;
     ms.forEach(m => totalMeetingHours += (m.duration||0));
   });
 
   // Build phases HTML for report
-  const phasesHtml = CL.map(phase => {
+  const phasesHtml = phases.map(phase => {
     const pd = phase.items.filter((_,i) => cl[`${phase.n}_${i}`]).length;
     const pp = Math.round(pd/phase.items.length*100);
     const color = pp===100 ? "#10b981" : pp>0 ? "#4f6ef7" : "#94a3b8";
@@ -4184,8 +4362,8 @@ function exportProjectReport(pid) {
   const startD = p.start ? new Date(p.start) : new Date();
   const endD   = p.target ? new Date(p.target) : new Date(startD.getTime()+90*24*60*60*1000);
   const totalMs = Math.max(endD-startD, 1);
-  const phaseMs = totalMs/CL.length;
-  const ganttRows = CL.map((phase,i)=>{
+  const phaseMs = totalMs/(phases.length || 1);
+  const ganttRows = phases.map((phase,i)=>{
     const pd=phase.items.filter((_,j)=>cl[`${phase.n}_${j}`]).length;
     const pp=Math.round(pd/phase.items.length*100);
     const color=pp===100?"#10b981":pp>0?"#4f6ef7":"#94a3b8";
@@ -4370,7 +4548,7 @@ function saveNotesForPhase(pid, phaseNum, arr) {
 function openNotesModal(pid, phaseNum) {
   if(!canViewProjectId(pid)) { showToast("🔐 Access denied"); return; }
   _notesPID = pid; _notesPhaseNum = phaseNum;
-  const phase = CL.find(p => p.n === phaseNum);
+  const phase = getPhaseByNum(pid, phaseNum);
   const canEdit = canEditProjectId(pid);
   document.getElementById("notesModalTag").textContent = "📌 Phase " + phaseNum + " — " + (phase ? phase.name : "");
   document.getElementById("notesAddSection").style.display = canEdit ? "block" : "none";
@@ -5456,9 +5634,11 @@ async function saveEditProject() {
   if(!p) return;
 
   const leaderPerson = _epSlSelected ? _people.find(u => u.u === _epSlSelected) : null;
+  const oldType = p.type || "Canvas App";
+  const newType = document.getElementById("epType").value;
   p.name     = name;
   p.desc     = document.getElementById("epDesc").value.trim();
-  p.type     = document.getElementById("epType").value;
+  p.type     = newType;
   p.priority = document.getElementById("epPriority").value;
   p.env      = document.getElementById("epEnv").value;
   p.status   = document.getElementById("epStatus").value;
@@ -5469,6 +5649,8 @@ async function saveEditProject() {
   p.spUrl    = document.getElementById("epSpUrl").value.trim();
   p.updatedAt= new Date().toISOString();
   p.updatedBy= currentUser ? currentUser.name : "Unknown";
+  if(newType === OTHER_PROJECT_TYPE && oldType !== OTHER_PROJECT_TYPE) p.customChecklist = cloneDefaultChecklist();
+  if(newType !== OTHER_PROJECT_TYPE) delete p.customChecklist;
 
   closeEditProject();
   refreshAllViews();
@@ -5691,7 +5873,7 @@ function getNC(pid) {
 }
 
 function openNaissanceModal(pid) {
-  if(!canEditProjectId(pid)) { showToast("🔐 Naissance Checklist is available only for assigned project team members"); return; }
+  if(!canEditProjectId(pid)) { showToast("🔐 Project Checklist is available only for assigned project team members"); return; }
   _ncPID = pid;
   _ncEditMode = false;
   loadNC();
@@ -5937,7 +6119,7 @@ async function saveNaissanceChecklist() {
   nc.lastUpdated = new Date().toISOString();
   saveNCLocal();
   _pendingPush = true;
-  showToast("✅ Naissance checklist saved!");
+  showToast("✅ Project checklist saved!");
   _ncEditMode = false;
   document.getElementById("ncEditToggleBtn").textContent = "✏️ Edit Structure";
   document.getElementById("ncEditToggleBtn").className = "nc-btn secondary";
@@ -5970,7 +6152,7 @@ function printNaissanceChecklist() {
   }).join("");
 
   const win = window.open("","_blank");
-  win.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Naissance Checklist — ${pName}</title>
+  win.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Project Checklist — ${pName}</title>
   <style>
     body { font-family: Arial, sans-serif; padding: 30px; color: #1e2340; }
     h1 { text-align:center; background:#1a4731; color:#fff; padding:14px; font-size:20px; margin:0 0 0 0; border-radius:4px 4px 0 0; }
@@ -5988,7 +6170,7 @@ function printNaissanceChecklist() {
     .progress { text-align:center; margin-bottom:18px; font-size:13px; color:#1a4731; font-weight:700; }
   </style></head><body>
   <div style="display:flex;align-items:center;gap:12px;margin-bottom:4px;"><img src="data:image/jpeg;base64,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" alt="Logo" style="width:52px;height:52px;object-fit:contain;border-radius:10px;background:#f1f8e9;padding:4px;border:2px solid #1a4731;"></div>
-  <h1>Naissance Project Checklist</h1>
+  <h1>Project Checklist</h1>
   <div class="meta"><span>Project Name: ${pName}</span><span>Date: ${date}</span><span>Completion: ${pct}% (${done}/${total})</span></div>
   <table><thead><tr><th>Sr. No</th><th>Category</th><th>Subcategory</th><th style="text-align:center;">Remark</th></tr></thead>
   <tbody>${rows}</tbody></table>
@@ -6210,7 +6392,7 @@ function generateMasterReport(format) {
     const cl = getCL(pid);
     let html = '<table style="width:100%;border-collapse:collapse;font-size:11px;margin-top:8px;">';
     html += '<thead><tr><th style="text-align:left;padding:5px 8px;background:#f8f9fd;border:1px solid #e2e6f0;font-weight:800;color:#5a6278;">Phase</th><th style="padding:5px 8px;background:#f8f9fd;border:1px solid #e2e6f0;text-align:center;font-weight:800;color:#5a6278;">Done</th><th style="padding:5px 8px;background:#f8f9fd;border:1px solid #e2e6f0;text-align:center;font-weight:800;color:#5a6278;">Total</th><th style="padding:5px 8px;background:#f8f9fd;border:1px solid #e2e6f0;text-align:right;font-weight:800;color:#5a6278;">Progress</th></tr></thead><tbody>';
-    CL.forEach(phase => {
+    getChecklistTemplate(pid).forEach(phase => {
       const pd = phase.items.filter((_,i) => cl[`${phase.n}_${i}`]).length;
       const pPct = Math.round(pd / phase.items.length * 100);
       const barColor = pPct===100?"#10b981":pPct>=50?"#4f6ef7":"#f59e0b";
@@ -6239,7 +6421,7 @@ function generateMasterReport(format) {
     const color = pct===100?"#10b981":pct>=50?"#4f6ef7":"#f59e0b";
     return `<div style="margin-top:6px;display:flex;align-items:center;gap:8px;padding:6px 10px;background:#f1f8e9;border:1px solid #c8d8c8;border-radius:7px;">
       <span style="font-size:13px;">📋</span>
-      <span style="font-size:11px;font-weight:700;color:#1a4731;">Naissance Checklist:</span>
+      <span style="font-size:11px;font-weight:700;color:#1a4731;">Project Checklist:</span>
       <span style="font-size:11px;color:#2d6b4a;">${done}/${total} items done</span>
       <div style="flex:1;height:4px;background:#c8d8c8;border-radius:2px;overflow:hidden;">
         <div style="height:100%;width:${pct}%;background:${color};border-radius:2px;"></div>
@@ -6520,8 +6702,11 @@ function exportMasterExcel(ps) {
   ];
   if(inclTeam)      headers.push("Project Leader", "Team Members");
   if(inclMeetings)  headers.push("Meetings Logged", "Notes");
-  if(inclChecklist) CL.forEach(ph => headers.push(`Phase ${ph.n}: ${ph.name} (%)`));
-  if(inclNaissance) headers.push("Naissance Done", "Naissance Total", "Naissance (%)");
+  const maxChecklistPhases = inclChecklist ? Math.max(0, ...ps.map(p => getChecklistTemplate(p.id).length)) : 0;
+  if(inclChecklist) {
+    for(let i=1; i<=maxChecklistPhases; i++) headers.push(`Phase ${i} Name`, `Phase ${i} (%)`);
+  }
+  if(inclNaissance) headers.push("Project Checklist Done", "Project Checklist Total", "Project Checklist (%)");
   headers.push("SharePoint URL", "Created At");
 
   const rows = [headers];
@@ -6537,10 +6722,12 @@ function exportMasterExcel(ps) {
     if(inclMeetings) { row.push(getMrTotalMeetings(p.id), getMrTotalNotes(p.id)); }
     if(inclChecklist) {
       const cl = getCL(p.id);
-      CL.forEach(phase => {
+      const phases = getChecklistTemplate(p.id);
+      phases.forEach(phase => {
         const pd = phase.items.filter((_,i) => cl[`${phase.n}_${i}`]).length;
-        row.push(Math.round(pd/phase.items.length*100));
+        row.push(phase.name, Math.round(pd/phase.items.length*100));
       });
+      for(let i=phases.length; i<maxChecklistPhases; i++) row.push("", "");
     }
     if(inclNaissance) {
       const nc = getNcStats(p.id);
@@ -6770,7 +6957,7 @@ function closeTargetWarnModal() {
           <div class="mr-option-icon">🗂️</div>
           <div>
             <div class="mr-option-title">Full Detail Report (PDF)</div>
-            <div class="mr-option-desc">Everything — Gantt, all checklist items per phase, meeting counts, notes, Naissance checklist, and sign-off section.</div>
+            <div class="mr-option-desc">Everything — Gantt, all checklist items per phase, meeting counts, notes, project checklist, and sign-off section.</div>
           </div>
         </div>
       </div>
@@ -6817,8 +7004,8 @@ function closeTargetWarnModal() {
         </div>
         <div class="mr-check-row" onclick="toggleMrCheck('mrIncNaissance')">
           <div class="mr-check-box checked" id="mrIncNaissance"></div>
-          <span class="mr-check-label">📋 Naissance Checklist Status</span>
-          <span class="mr-check-sub">Naissance items done / total per project</span>
+          <span class="mr-check-label">📋 Project Checklist Status</span>
+          <span class="mr-check-sub">Project checklist items done / total per project</span>
         </div>
       </div>
     </div>
@@ -6839,7 +7026,7 @@ function closeTargetWarnModal() {
         <div class="nc-title-block">
           <div class="nc-logo-badge">📋</div>
           <div>
-            <div class="nc-modal-title">Naissance Project Checklist</div>
+            <div class="nc-modal-title">Project Checklist</div>
             <div class="nc-modal-sub" id="ncModalSub">Project quality milestone tracker</div>
           </div>
         </div>
@@ -6900,7 +7087,7 @@ function closeTargetWarnModal() {
       <div class="ep-field"><label>App Type</label>
         <select id="epType">
           <option>Canvas App</option><option>Model-Driven</option>
-          <option>Power Pages</option><option>Power Automate</option><option>Mixed</option>
+          <option>Power Pages</option><option>Power Automate</option><option>Mixed</option><option>Other Project</option>
         </select>
       </div>
       <div class="ep-field"><label>Priority</label>
@@ -6965,21 +7152,3 @@ function closeTargetWarnModal() {
 
 </body>
 </html>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
