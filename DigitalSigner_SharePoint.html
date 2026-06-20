@@ -303,9 +303,21 @@
         <div class="sidebar">
             <div class="sidebar-scroll-area">
 
+                <!-- Pending Documents To Sign (from SharePoint DIGITAL_SIGN library) -->
+                <div class="card" style="border-color:#fde68a; background:#fffbeb;">
+                    <h4 style="display:flex; justify-content:space-between; align-items:center;">
+                        <span>Pending Documents To Sign</span>
+                        <span id="pendingDocsBadge" style="background:#f59e0b; color:#fff; border-radius:20px; padding:2px 9px; font-size:0.7rem; display:none;">0</span>
+                    </h4>
+                    <p style="font-size:0.78rem; color:#92400e; margin:0 0 10px;">Documents assigned to you (Emp Code: <b id="pendingDocsEmpId">--</b>) waiting for your signature.</p>
+                    <button class="btn btn-primary" onclick="openPendingDocs()">
+                        <i class="fas fa-inbox"></i> View Pending Documents
+                    </button>
+                </div>
+
                 <!-- Document Selection -->
                 <div class="card">
-                    <h4>1. Document Selection</h4>
+                    <h4>1. Document Selection (Manual Upload)</h4>
                     <input type="file" id="pdfUpload" accept=".pdf" style="width:100%; font-size:0.8rem; margin-bottom:12px;">
                     <button class="btn btn-primary" onclick="previewPDF()">
                         <i class="fas fa-file-import"></i> Load Document
@@ -353,8 +365,12 @@
 
             </div>
             <div class="sidebar-footer">
-                <button class="btn btn-success" onclick="downloadPDF()">
-                    <i class="fas fa-file-export"></i> Download Signed PDF
+                <div id="signingSourceBanner" class="hidden" style="font-size:0.74rem; color:#1e3a8a; background:#eff6ff; border:1px solid #bfdbfe; border-radius:8px; padding:8px 10px; margin-bottom:10px;">
+                    <i class="fas fa-link"></i> Signing from SharePoint: <b id="signingSourceFileName"></b>
+                    <button onclick="clearSigningSource()" style="float:right; border:none; background:none; color:#64748b; cursor:pointer; font-size:0.75rem;" title="Cancel and go back to manual upload"><i class="fas fa-times"></i></button>
+                </div>
+                <button class="btn btn-success" id="finalizeBtn" onclick="handleFinalizeClick()">
+                    <i class="fas fa-file-export" id="finalizeBtnIcon"></i> <span id="finalizeBtnLabel">Download Signed PDF</span>
                 </button>
             </div>
         </div>
@@ -399,6 +415,19 @@
             <button onclick="closeSigningHistory()" style="border:none; background:none; font-size:1.1rem; color:#94a3b8; cursor:pointer;"><i class="fas fa-times"></i></button>
         </div>
         <div style="padding:16px 24px; overflow-y:auto; flex:1;" id="historyModalBody">
+            <p style="text-align:center; color:#64748b; font-size:0.85rem;"><i class="fas fa-spinner fa-spin"></i> Loading...</p>
+        </div>
+    </div>
+</div>
+
+<!-- ══ PENDING DOCUMENTS MODAL ══ -->
+<div id="pendingDocsModal" style="display:none; position:fixed; inset:0; background:rgba(10,15,40,0.72); backdrop-filter:blur(3px); z-index:999998; justify-content:center; align-items:center;">
+    <div style="background:#fff; border-radius:18px; width:92%; max-width:760px; max-height:80vh; display:flex; flex-direction:column; box-shadow:0 30px 80px rgba(0,0,0,0.45); overflow:hidden;">
+        <div style="display:flex; align-items:center; justify-content:space-between; padding:18px 24px; border-bottom:1px solid #f1f5f9;">
+            <div style="font-size:1rem; font-weight:700; color:#0f172a;"><i class="fas fa-inbox"></i>&nbsp; Documents Pending Your Signature</div>
+            <button onclick="closePendingDocs()" style="border:none; background:none; font-size:1.1rem; color:#94a3b8; cursor:pointer;"><i class="fas fa-times"></i></button>
+        </div>
+        <div style="padding:16px 24px; overflow-y:auto; flex:1;" id="pendingDocsModalBody">
             <p style="text-align:center; color:#64748b; font-size:0.85rem;"><i class="fas fa-spinner fa-spin"></i> Loading...</p>
         </div>
     </div>
@@ -519,6 +548,13 @@ const SHAREPOINT_HOST      = "godavariurban.sharepoint.com";             // ✅ 
 const SHAREPOINT_SITE_NAME = "GUMCCSLFDCOMMISTION";                      // ✅ SharePoint site name
 // ─────────────────────────────────────────────────────────────────────────────────
 
+// ── "Pending Documents To Sign" — reads/writes the existing DIGITAL_SIGN document
+//    library (the one with Ref_ID / Document_DigiSign_Status / Branch_Name / Emp_ID
+//    columns). A manager only ever sees rows where Emp_ID matches their own login.
+const PENDING_DOC_LIBRARY = "DIGITAL_SIGN";    // ✅ document library name
+const STATUS_NOT_SIGNED   = "Not Signed";      // ✅ value in Document_DigiSign_Status before signing
+const STATUS_SIGNED       = "Signature Done";  // ✅ value written back after signing
+
 // ── Derived constants
 const GRAPH         = "https://graph.microsoft.com/v1.0";
 const SP_SITE_PATH  = `/sites/${SHAREPOINT_HOST}:/sites/${SHAREPOINT_SITE_NAME}`;
@@ -621,6 +657,17 @@ async function _getListId(listName) {
     if (!d.value?.length) throw new Error(`SharePoint list "${listName}" not found. Check setup guide.`);
     _listIdCache[listName] = d.value[0].id;
     return _listIdCache[listName];
+}
+
+// ── A document library's associated Drive ID (needed to read/replace file content)
+const _driveIdCache = {};
+async function _getLibraryDriveId(listName) {
+    if (_driveIdCache[listName]) return _driveIdCache[listName];
+    const siteId = await _getSiteId();
+    const listId = await _getListId(listName);
+    const d = await _graph("GET", `/sites/${siteId}/lists/${listId}/drive`);
+    _driveIdCache[listName] = d.id;
+    return _driveIdCache[listName];
 }
 
 // ── FIELD MAPPING ──────────────────────────────────────────────────────────────
@@ -805,6 +852,86 @@ async function _logJourney(branch, empId, empName, post, ip, status, action, det
         AllowedIP: ip, Status: status, Action: action,
         Details: details, ChangedBy: "Branch App"
     });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  MANAGER "PENDING DOCUMENTS TO SIGN"  (DIGITAL_SIGN document library)
+//  This library is a normal SharePoint doc library, not a GU_* list, so it's read
+//  via the Drive API directly (root/children, expanding each file's listItem.fields
+//  to get Ref_ID / Document_DigiSign_Status / Branch_Name / Emp_ID in one call).
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ── Tolerant field lookup — SharePoint sometimes mangles internal names that
+//    contain underscores (e.g. "_x005f_") if a column was renamed after creation.
+//    Tries the exact key first, then a case-insensitive / unmangled match.
+function _ffield(fields, name) {
+    if (!fields) return undefined;
+    if (fields[name] !== undefined) return fields[name];
+    const target = name.toLowerCase();
+    const key = Object.keys(fields).find(k =>
+        k.toLowerCase() === target || k.toLowerCase().replace(/_x005f_/g, "_") === target);
+    return key ? fields[key] : undefined;
+}
+// Same idea, but returns the matching KEY (not the value) — used so we write
+// status updates back using the field's real internal name, not a guess.
+function _ffieldKey(fields, name) {
+    if (!fields) return name;
+    if (fields[name] !== undefined) return name;
+    const target = name.toLowerCase();
+    return Object.keys(fields).find(k =>
+        k.toLowerCase() === target || k.toLowerCase().replace(/_x005f_/g, "_") === target) || name;
+}
+
+// ── Read all files (+ custom column values) from the DIGITAL_SIGN library
+async function _getDigitalSignFiles() {
+    const siteId  = await _getSiteId();
+    const driveId = await _getLibraryDriveId(PENDING_DOC_LIBRARY);
+    let endpoint  = `/sites/${siteId}/drives/${driveId}/root/children?$expand=listItem($expand=fields)&$top=999`;
+    let items = [];
+    while (endpoint) {
+        const d = await _graph("GET", endpoint);
+        items = items.concat((d.value || []).filter(i => i.file)); // files only, skip folders
+        endpoint = d["@odata.nextLink"] ? d["@odata.nextLink"].replace(GRAPH, "") : null;
+    }
+    return items;
+}
+
+// ── Documents waiting for the signed-in manager's signature (matched by Emp_ID)
+async function fetchMyPendingDocuments() {
+    const empId = String(currentUser?.empCode || "").trim().toLowerCase();
+    const files = await _getDigitalSignFiles();
+    return files.filter(i => {
+        const f = i.listItem?.fields || {};
+        const itemEmp  = String(_ffield(f, "Emp_ID") ?? "").trim().toLowerCase();
+        const itemStat = String(_ffield(f, "Document_DigiSign_Status") ?? "").trim().toLowerCase();
+        return itemEmp === empId && itemEmp !== "" && itemStat === STATUS_NOT_SIGNED.toLowerCase();
+    });
+}
+
+// ── Replace a file's content in place (same item/filename — SharePoint keeps version history)
+//    NOTE: simple PUT works for files up to ~4MB. If signed PDFs typically exceed that,
+//    this would need to switch to a Graph "upload session" (chunked upload) instead.
+async function _replaceDriveItemContent(driveId, itemId, bytes) {
+    const token  = await _getSpToken();
+    const siteId = await _getSiteId();
+    const res = await fetch(`${GRAPH}/sites/${siteId}/drives/${driveId}/items/${itemId}/content`, {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/pdf" },
+        body: bytes
+    });
+    if (!res.ok) {
+        const t = await res.text().catch(() => "");
+        throw new Error(`SharePoint rejected the file update (HTTP ${res.status}). ${t}`);
+    }
+    return res.json();
+}
+
+// ── Flip Document_DigiSign_Status: "Not Signed" → "Signature Done"
+async function _markDocSigned(driveId, itemId, statusFieldKey) {
+    const siteId = await _getSiteId();
+    const body = {};
+    body[statusFieldKey || "Document_DigiSign_Status"] = STATUS_SIGNED;
+    await _graph("PATCH", `/sites/${siteId}/drives/${driveId}/items/${itemId}/listItem/fields`, body);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1043,6 +1170,12 @@ function showDownloadToast(fileName) {
 let currentUser   = null;   // { name, branch, post, empId }
 let currentIP     = "";
 let pendingEmpId  = "";     // emp id during activation flow
+
+// ── Set only when the loaded PDF came from the "Pending Documents" queue
+//    (DIGITAL_SIGN library). When set, finalizing the signature writes the
+//    file straight back into SharePoint instead of just downloading it.
+let currentSigningSource = null;  // { driveId, itemId, fileName, refId, statusFieldKey }
+let _lastPendingDocsCache = [];   // last list fetched, so "Open to Sign" doesn't refetch
 
 // ── Brute-force lockout state ──
 const MAX_LOGIN_ATTEMPTS  = 5;
@@ -1935,6 +2068,11 @@ function launchMainApp() {
 
     refreshSignatureUI();
     startIdleTimer();
+
+    // Pending Documents To Sign (DIGITAL_SIGN library)
+    const empIdEl = document.getElementById("pendingDocsEmpId");
+    if (empIdEl) empIdEl.textContent = currentUser.empCode || "--";
+    refreshPendingDocsBadge();
 }
 
 // ── Idle session auto-logout ──
@@ -1965,6 +2103,18 @@ function forceLogout() {
     pdfBytes   = null;
     pdfDocJS   = null;
     pageNum    = 1;
+    currentSigningSource  = null;
+    _lastPendingDocsCache = [];
+
+    // Reset the finalize button + signing-source banner back to manual-upload mode
+    const sb = document.getElementById("signingSourceBanner");
+    if (sb) sb.classList.add("hidden");
+    const fl = document.getElementById("finalizeBtnLabel");
+    if (fl) fl.textContent = "Download Signed PDF";
+    const fi = document.getElementById("finalizeBtnIcon");
+    if (fi) fi.className = "fas fa-file-export";
+    const pb = document.getElementById("pendingDocsBadge");
+    if (pb) pb.style.display = "none";
 
     // Clear PDF canvas
     const canv = document.getElementById("pdfCanvas");
@@ -2207,16 +2357,16 @@ function changePage(v) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  DOWNLOAD SIGNED PDF
+//  BUILD SIGNED PDF  (shared by both "Download" and "Sign & Update in SharePoint")
 // ═══════════════════════════════════════════════════════════════
-async function downloadPDF() {
-    if (!pdfBytes)              { await guAlert("Please load a PDF document first.", 'warning'); return; }
-    if (!currentUser.savedSig)  { await guAlert("Please register your signature first.", 'warning'); return; }
+async function _buildSignedPdf() {
+    if (!pdfBytes)              { await guAlert("Please load a PDF document first.", 'warning'); return null; }
+    if (!currentUser.savedSig)  { await guAlert("Please register your signature first.", 'warning'); return null; }
 
     const sigDataUri = document.getElementById("dragImg").src;
     if (!sigDataUri || sigDataUri === window.location.href) {
         await guAlert("Please click your signature to place it on the document first.", 'warning');
-        return;
+        return null;
     }
 
     const { PDFDocument, rgb, StandardFonts } = PDFLib;
@@ -2233,7 +2383,7 @@ async function downloadPDF() {
         }
     } catch (e) {
         await guAlert("Signature image format not supported. Please use PNG or JPG.", 'danger');
-        return;
+        return null;
     }
 
     const canv    = document.getElementById("pdfCanvas");
@@ -2277,7 +2427,11 @@ async function downloadPDF() {
     page.drawText(`Verify ID: ${eventId}`,                                              { ...textConfig, y: y - 42 });
 
     const pdfDataUri = await pdfDoc.save();
-    const fileName   = `Signed_${currentUser.branch}_${signedAt.toISOString().slice(0,10)}.pdf`;
+    // SharePoint-sourced docs keep their original filename (being replaced in place);
+    // manually-uploaded docs get the original auto-generated name.
+    const fileName = currentSigningSource
+        ? currentSigningSource.fileName
+        : `Signed_${currentUser.branch}_${signedAt.toISOString().slice(0,10)}.pdf`;
 
     // ── Fingerprint the FINAL signed file and log it centrally.
     //    Anyone can later re-hash this exact PDF and compare it to this record —
@@ -2304,7 +2458,11 @@ async function downloadPDF() {
         );
     }
 
-    const blob       = new Blob([pdfDataUri], { type: "application/pdf" });
+    return { bytes: pdfDataUri, fileName, eventId, signedAt };
+}
+
+function _triggerBrowserDownload(bytes, fileName) {
+    const blob       = new Blob([bytes], { type: "application/pdf" });
     const url        = URL.createObjectURL(blob);
     const link       = document.createElement("a");
     link.href        = url;
@@ -2314,6 +2472,67 @@ async function downloadPDF() {
     document.body.removeChild(link);
     setTimeout(() => URL.revokeObjectURL(url), 5000);
     showDownloadToast(fileName);
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  DOWNLOAD SIGNED PDF  (manual-upload path)
+// ═══════════════════════════════════════════════════════════════
+async function downloadPDF() {
+    const result = await _buildSignedPdf();
+    if (!result) return;
+    _triggerBrowserDownload(result.bytes, result.fileName);
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  SIGN & UPDATE IN SHAREPOINT  (pending-documents path)
+//  Replaces the file's content in the DIGITAL_SIGN library in place and flips
+//  Document_DigiSign_Status from "Not Signed" to "Signature Done". A copy can
+//  optionally be downloaded afterwards — SharePoint is always updated first.
+// ═══════════════════════════════════════════════════════════════
+async function submitSignedDocumentToSharePoint() {
+    const source = currentSigningSource;
+    if (!source) { await downloadPDF(); return; }
+
+    const result = await _buildSignedPdf();
+    if (!result) return;
+
+    const btn = document.getElementById("finalizeBtn");
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Updating SharePoint...'; }
+
+    try {
+        await _replaceDriveItemContent(source.driveId, source.itemId, result.bytes);
+        await _markDocSigned(source.driveId, source.itemId, source.statusFieldKey);
+
+        currentSigningSource = null;
+        updateFinalizeButtonForSource();
+        refreshPendingDocsBadge();
+
+        const wantsCopy = await guConfirm(
+            `"${source.fileName}" has been signed and updated in SharePoint.\nDocument_DigiSign_Status is now "${STATUS_SIGNED}".\n\nWould you like to download a copy for your records?`,
+            'success', 'Download a Copy', 'Done'
+        );
+        if (wantsCopy) _triggerBrowserDownload(result.bytes, result.fileName);
+
+    } catch (e) {
+        await guAlert(
+            "The document was signed, but could not be saved back to SharePoint.\n\nError: " + e.message +
+            "\n\nA local copy will be downloaded now so your work isn't lost — please inform IT and re-upload it manually.",
+            'danger'
+        );
+        _triggerBrowserDownload(result.bytes, result.fileName);
+    } finally {
+        if (btn) { btn.disabled = false; }
+        updateFinalizeButtonForSource();
+    }
+}
+
+// ── Footer button dispatcher: routes to the right finalize path
+async function handleFinalizeClick() {
+    if (currentSigningSource) {
+        await submitSignedDocumentToSharePoint();
+    } else {
+        await downloadPDF();
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -2364,6 +2583,131 @@ async function openSigningHistory() {
 
 function closeSigningHistory() {
     document.getElementById("historyModal").style.display = "none";
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  PENDING DOCUMENTS TO SIGN  (DIGITAL_SIGN library, matched by Emp_ID)
+// ═══════════════════════════════════════════════════════════════
+async function openPendingDocs() {
+    const modal = document.getElementById("pendingDocsModal");
+    const body  = document.getElementById("pendingDocsModalBody");
+    modal.style.display = "flex";
+    body.innerHTML = `<p style="text-align:center; color:#64748b; font-size:0.85rem;"><i class="fas fa-spinner fa-spin"></i> Loading your pending documents...</p>`;
+
+    try {
+        const docs = await fetchMyPendingDocuments();
+        _lastPendingDocsCache = docs;
+        renderPendingDocsList(docs);
+        updatePendingDocsBadge(docs.length);
+    } catch (e) {
+        body.innerHTML = `<p style="text-align:center; color:#ef4444; font-size:0.85rem; padding:20px 0;">Could not load pending documents.<br>${e.message}</p>`;
+    }
+}
+
+function renderPendingDocsList(docs) {
+    const body = document.getElementById("pendingDocsModalBody");
+    if (!docs.length) {
+        body.innerHTML = `<p style="text-align:center; color:#64748b; font-size:0.85rem; padding:20px 0;"><i class="fas fa-circle-check" style="color:#22c55e;"></i> No documents pending your signature right now.</p>`;
+        return;
+    }
+    const rows = docs.map(d => {
+        const f = d.listItem?.fields || {};
+        const refId   = _ffield(f, "Ref_ID") || "-";
+        const branch  = _ffield(f, "Branch_Name") || "-";
+        const safeName = (d.name || "").replace(/'/g, "\\'");
+        return `
+        <tr>
+            <td style="padding:10px 8px; border-bottom:1px solid #f1f5f9; font-size:0.8rem; color:#0f172a;"><i class="fas fa-file-pdf" style="color:#ef4444;"></i> ${d.name}</td>
+            <td style="padding:10px 8px; border-bottom:1px solid #f1f5f9; font-size:0.78rem; color:#334155;">${refId}</td>
+            <td style="padding:10px 8px; border-bottom:1px solid #f1f5f9; font-size:0.78rem; color:#334155;">${branch}</td>
+            <td style="padding:10px 8px; border-bottom:1px solid #f1f5f9;">
+                <button class="btn btn-primary" style="width:auto; padding:7px 14px; font-size:0.78rem;" onclick="loadPendingDocIntoViewer('${d.id}')">
+                    <i class="fas fa-pen"></i> Open to Sign
+                </button>
+            </td>
+        </tr>`;
+    }).join("");
+    body.innerHTML = `
+        <p style="font-size:0.78rem; color:#64748b; margin:0 0 12px;">${docs.length} document${docs.length === 1 ? "" : "s"} waiting for your signature.</p>
+        <table style="width:100%; border-collapse:collapse;">
+            <thead><tr>
+                <th style="text-align:left; padding:8px; font-size:0.68rem; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px; border-bottom:1px solid #e2e8f0;">File</th>
+                <th style="text-align:left; padding:8px; font-size:0.68rem; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px; border-bottom:1px solid #e2e8f0;">Ref ID</th>
+                <th style="text-align:left; padding:8px; font-size:0.68rem; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px; border-bottom:1px solid #e2e8f0;">Branch</th>
+                <th style="text-align:left; padding:8px; font-size:0.68rem; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px; border-bottom:1px solid #e2e8f0;"></th>
+            </tr></thead>
+            <tbody>${rows}</tbody>
+        </table>`;
+}
+
+function closePendingDocs() {
+    document.getElementById("pendingDocsModal").style.display = "none";
+}
+
+function updatePendingDocsBadge(count) {
+    const badge = document.getElementById("pendingDocsBadge");
+    if (!badge) return;
+    if (count > 0) { badge.textContent = count; badge.style.display = "inline-block"; }
+    else badge.style.display = "none";
+}
+
+async function refreshPendingDocsBadge() {
+    try {
+        const docs = await fetchMyPendingDocuments();
+        updatePendingDocsBadge(docs.length);
+    } catch (e) { /* silent — badge just won't update */ }
+}
+
+// ── Pull a SharePoint-pending PDF's bytes into the existing viewer/signing flow,
+//    and remember where it came from so "finalize" writes it back to SharePoint.
+async function loadPendingDocIntoViewer(itemId) {
+    const item = _lastPendingDocsCache.find(d => d.id === itemId);
+    if (!item) { await guAlert("Could not find that document anymore. Please reopen the list.", 'warning'); return; }
+
+    try {
+        const downloadUrl = item["@microsoft.graph.downloadUrl"];
+        const res = await fetch(downloadUrl);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        pdfBytes = await res.arrayBuffer();
+
+        const driveId = await _getLibraryDriveId(PENDING_DOC_LIBRARY);
+        const fields  = item.listItem?.fields || {};
+        currentSigningSource = {
+            driveId, itemId: item.id, fileName: item.name,
+            refId: _ffield(fields, "Ref_ID") || "",
+            statusFieldKey: _ffieldKey(fields, "Document_DigiSign_Status")
+        };
+
+        await previewPDF();
+        closePendingDocs();
+        updateFinalizeButtonForSource();
+        await guAlert(`"${item.name}" loaded. Place your signature on the page, then click "Sign & Update in SharePoint".`, 'success');
+    } catch (e) {
+        await guAlert("Could not download this document from SharePoint.\n\n" + e.message, 'danger');
+    }
+}
+
+// ── Reflect whether the loaded PDF is a SharePoint pending doc or a manual upload
+function updateFinalizeButtonForSource() {
+    const banner   = document.getElementById("signingSourceBanner");
+    const fileNm   = document.getElementById("signingSourceFileName");
+    const btnLabel = document.getElementById("finalizeBtnLabel");
+    const btnIcon  = document.getElementById("finalizeBtnIcon");
+    if (currentSigningSource) {
+        banner.classList.remove("hidden");
+        fileNm.textContent = currentSigningSource.fileName;
+        btnLabel.textContent = "Sign & Update in SharePoint";
+        btnIcon.className = "fas fa-cloud-upload-alt";
+    } else {
+        banner.classList.add("hidden");
+        btnLabel.textContent = "Download Signed PDF";
+        btnIcon.className = "fas fa-file-export";
+    }
+}
+
+function clearSigningSource() {
+    currentSigningSource = null;
+    updateFinalizeButtonForSource();
 }
 
 </script>
