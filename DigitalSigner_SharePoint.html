@@ -60,47 +60,192 @@
         /* ── CUSTOM ALERT / CONFIRM DIALOG ── */
         #guDialog {
             display: none; position: fixed; inset: 0; z-index: 999999;
-            background: rgba(10,15,40,0.72);
-            backdrop-filter: blur(3px);
+            background: rgba(8,12,30,0.78);
+            backdrop-filter: blur(6px);
             justify-content: center; align-items: center;
             font-family: 'Inter','Segoe UI',sans-serif;
+            padding: 20px;
         }
         #guDialog.show { display: flex; }
         .gu-dialog-box {
-            background: #fff; border-radius: 18px; width: 90%; max-width: 420px;
-            box-shadow: 0 30px 80px rgba(0,0,0,0.45);
-            overflow: hidden; animation: guPop .22s cubic-bezier(.34,1.56,.64,1);
+            background: #fff; border-radius: 20px; width: 100%; max-width: 420px;
+            box-shadow: 0 8px 16px -8px rgba(15,23,42,0.15), 0 30px 60px -20px rgba(15,23,42,0.5);
+            overflow: hidden; animation: guPop .28s cubic-bezier(.34,1.56,.64,1);
+            border: 1px solid rgba(255,255,255,0.08);
+            position: relative;
         }
-        @keyframes guPop { from { transform: scale(0.88); opacity:0; } to { transform: scale(1); opacity:1; } }
+        @keyframes guPop { from { transform: scale(0.9) translateY(8px); opacity:0; } to { transform: scale(1) translateY(0); opacity:1; } }
+        .gu-dialog-accent {
+            height: 5px; width: 100%;
+            background: linear-gradient(90deg, var(--accent), var(--primary));
+        }
+        .gu-dialog-accent.success { background: linear-gradient(90deg, #34d399, #059669); }
+        .gu-dialog-accent.warning { background: linear-gradient(90deg, #fbbf24, #d97706); }
+        .gu-dialog-accent.danger  { background: linear-gradient(90deg, #f87171, #dc2626); }
+        .gu-dialog-accent.confirm { background: linear-gradient(90deg, #a78bfa, #7c3aed); }
         .gu-dialog-header {
-            display: flex; align-items: center; gap: 12px;
-            padding: 20px 24px 16px;
-            border-bottom: 1px solid #f1f5f9;
+            display: flex; align-items: flex-start; gap: 14px;
+            padding: 24px 26px 6px;
         }
         .gu-dialog-icon {
-            width: 42px; height: 42px; border-radius: 50%;
+            width: 46px; height: 46px; border-radius: 14px;
             display: flex; align-items: center; justify-content: center;
-            font-size: 1.2rem; flex-shrink: 0;
+            font-size: 1.25rem; flex-shrink: 0;
+            box-shadow: inset 0 0 0 1px rgba(0,0,0,0.04);
         }
-        .gu-dialog-icon.info    { background: #eff6ff; color: #1e3a8a; }
-        .gu-dialog-icon.success { background: #f0fdf4; color: #059669; }
-        .gu-dialog-icon.warning { background: #fff7ed; color: #d97706; }
-        .gu-dialog-icon.danger  { background: #fef2f2; color: #ef4444; }
-        .gu-dialog-icon.confirm { background: #f5f3ff; color: #7c3aed; }
-        .gu-dialog-title { font-size: 1rem; font-weight: 700; color: #0f172a; }
-        .gu-dialog-body { padding: 16px 24px 20px; font-size: 0.9rem; color: #374151; line-height: 1.65; white-space: pre-wrap; text-align: left; }
-        .gu-dialog-footer { display: flex; gap: 10px; padding: 0 24px 22px; justify-content: flex-end; }
+        .gu-dialog-icon.info    { background: linear-gradient(145deg,#eff6ff,#dbeafe); color: #1e3a8a; }
+        .gu-dialog-icon.success { background: linear-gradient(145deg,#f0fdf4,#dcfce7); color: #059669; }
+        .gu-dialog-icon.warning { background: linear-gradient(145deg,#fff7ed,#ffedd5); color: #d97706; }
+        .gu-dialog-icon.danger  { background: linear-gradient(145deg,#fef2f2,#fee2e2); color: #ef4444; }
+        .gu-dialog-icon.confirm { background: linear-gradient(145deg,#f5f3ff,#ede9fe); color: #7c3aed; }
+        .gu-dialog-title { font-size: 1.05rem; font-weight: 700; color: #0f172a; margin-top: 4px; letter-spacing: -0.01em; }
+        .gu-dialog-close {
+            position: absolute; top: 16px; right: 16px;
+            width: 30px; height: 30px; border-radius: 50%; border: none;
+            background: #f1f5f9; color: #94a3b8; cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 0.8rem; transition: background .15s, color .15s;
+        }
+        .gu-dialog-close:hover { background: #e2e8f0; color: #475569; }
+        .gu-dialog-body { padding: 8px 26px 22px 26px; padding-left: 78px; font-size: 0.88rem; color: #475569; line-height: 1.6; white-space: pre-wrap; text-align: left; margin-top: -4px; }
+        .gu-dialog-footer { display: flex; gap: 10px; padding: 16px 22px 22px; justify-content: flex-end; background: #fafbfc; border-top: 1px solid #f1f5f9; }
         .gu-btn {
-            padding: 10px 22px; border-radius: 9px; border: none;
-            font-size: 0.9rem; font-weight: 600; cursor: pointer; transition: .15s;
-            font-family: inherit;
+            padding: 11px 22px; border-radius: 10px; border: none;
+            font-size: 0.87rem; font-weight: 600; cursor: pointer; transition: all .15s;
+            font-family: inherit; letter-spacing: 0.01em;
         }
-        .gu-btn-primary { background: var(--primary); color: #fff; }
-        .gu-btn-primary:hover { background: var(--primary-dark); }
-        .gu-btn-danger  { background: #ef4444; color: #fff; }
-        .gu-btn-danger:hover  { background: #dc2626; }
-        .gu-btn-outline { background: #f8fafc; color: #374151; border: 1px solid #e2e8f0; }
-        .gu-btn-outline:hover { background: #f1f5f9; }
+        .gu-btn-primary { background: var(--primary); color: #fff; box-shadow: 0 2px 8px rgba(30,58,138,0.25); }
+        .gu-btn-primary:hover { background: var(--primary-dark); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(30,58,138,0.32); }
+        .gu-btn-danger  { background: #ef4444; color: #fff; box-shadow: 0 2px 8px rgba(239,68,68,0.25); }
+        .gu-btn-danger:hover  { background: #dc2626; transform: translateY(-1px); box-shadow: 0 4px 12px rgba(220,38,38,0.32); }
+        .gu-btn-outline { background: #fff; color: #475569; border: 1px solid #e2e8f0; }
+        .gu-btn-outline:hover { background: #f8fafc; border-color: #cbd5e1; }
+
+        /* ── SHARED MODAL SHELL (History + Pending Docs) ── */
+        .gu-modal-overlay {
+            display: none; position: fixed; inset: 0;
+            background: rgba(8,12,30,0.78); backdrop-filter: blur(6px);
+            z-index: 999998; justify-content: center; align-items: center; padding: 20px;
+        }
+        .gu-modal-overlay.show, .gu-modal-overlay[style*="flex"] { display: flex; }
+        .gu-modal-box {
+            background: #fff; border-radius: 20px; width: 100%;
+            max-height: 84vh; display: flex; flex-direction: column;
+            box-shadow: 0 8px 16px -8px rgba(15,23,42,0.15), 0 40px 80px -20px rgba(15,23,42,0.55);
+            overflow: hidden; animation: guPop .25s cubic-bezier(.34,1.56,.64,1);
+        }
+        .gu-modal-accent { height: 4px; width: 100%; background: linear-gradient(90deg, var(--accent), var(--primary)); flex-shrink: 0; }
+        .gu-modal-accent.warning { background: linear-gradient(90deg, #fbbf24, #d97706); }
+        .gu-modal-header {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 20px 26px; border-bottom: 1px solid #f1f5f9; flex-shrink: 0;
+            background: linear-gradient(180deg, #fafbfc, #ffffff);
+        }
+        .gu-modal-header-left { display: flex; align-items: center; gap: 14px; }
+        .gu-modal-icon {
+            width: 44px; height: 44px; border-radius: 13px; flex-shrink: 0;
+            display: flex; align-items: center; justify-content: center; font-size: 1.15rem;
+        }
+        .gu-modal-icon.history { background: linear-gradient(145deg,#eff6ff,#dbeafe); color: var(--primary); }
+        .gu-modal-icon.pending { background: linear-gradient(145deg,#fff7ed,#ffedd5); color: #d97706; }
+        .gu-modal-title { font-size: 1.05rem; font-weight: 700; color: #0f172a; letter-spacing: -0.01em; }
+        .gu-modal-subtitle { font-size: 0.78rem; color: #94a3b8; margin-top: 3px; font-weight: 500; }
+        .gu-emp-pill {
+            display: inline-block; background: #f1f5f9; color: #334155;
+            font-family: 'SF Mono', monospace; font-weight: 700; font-size: 0.72rem;
+            padding: 1px 8px; border-radius: 6px; margin-left: 2px;
+        }
+        .gu-modal-close {
+            width: 36px; height: 36px; border-radius: 50%; border: none;
+            background: #f1f5f9; color: #94a3b8; cursor: pointer; flex-shrink: 0;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 0.95rem; transition: background .15s, color .15s, transform .15s;
+        }
+        .gu-modal-close:hover { background: #fee2e2; color: #ef4444; transform: rotate(90deg); }
+        .gu-modal-body { padding: 18px 26px 24px; overflow-y: auto; flex: 1; background: #fbfcfd; }
+        .gu-modal-body::-webkit-scrollbar { width: 8px; }
+        .gu-modal-body::-webkit-scrollbar-track { background: transparent; }
+        .gu-modal-body::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 8px; }
+        .gu-modal-body::-webkit-scrollbar-thumb:hover { background: #cbd5e1; }
+        .gu-modal-loading { text-align: center; color: #64748b; font-size: 0.85rem; padding: 50px 0; }
+
+        .gu-modal-count {
+            display: flex; align-items: center; gap: 8px;
+            font-size: 0.8rem; color: #475569; font-weight: 600; margin: 0 0 16px;
+        }
+        .gu-modal-count .gu-count-num {
+            background: var(--primary); color: #fff; border-radius: 20px;
+            padding: 2px 10px; font-size: 0.75rem; font-weight: 700;
+        }
+        .gu-empty-state {
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            padding: 56px 20px; text-align: center; color: #94a3b8;
+        }
+        .gu-empty-state .gu-empty-icon {
+            width: 60px; height: 60px; border-radius: 50%; background: #f0fdf4; color: #22c55e;
+            display: flex; align-items: center; justify-content: center; font-size: 1.6rem; margin-bottom: 14px;
+        }
+        .gu-empty-state .gu-empty-title { font-size: 0.92rem; font-weight: 700; color: #334155; }
+        .gu-empty-state .gu-empty-sub { font-size: 0.78rem; color: #94a3b8; margin-top: 4px; }
+        .gu-error-state { text-align: center; color: #ef4444; font-size: 0.85rem; padding: 40px 0; }
+
+        /* ── PENDING DOC CARD ROWS ── */
+        .gu-doc-card {
+            display: flex; align-items: center; gap: 16px;
+            background: #fff; border: 1px solid #eef1f5; border-radius: 14px;
+            padding: 14px 18px; margin-bottom: 10px;
+            transition: border-color .15s, box-shadow .15s, transform .15s;
+        }
+        .gu-doc-card:hover { border-color: #dbeafe; box-shadow: 0 6px 18px -6px rgba(30,58,138,0.12); transform: translateY(-1px); }
+        .gu-doc-card:last-child { margin-bottom: 0; }
+        .gu-doc-icon {
+            width: 42px; height: 42px; border-radius: 11px; flex-shrink: 0;
+            background: linear-gradient(145deg,#fef2f2,#fee2e2); color: #ef4444;
+            display: flex; align-items: center; justify-content: center; font-size: 1.1rem;
+        }
+        .gu-doc-main { flex: 1; min-width: 0; }
+        .gu-doc-name {
+            font-size: 0.88rem; font-weight: 700; color: #0f172a;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .gu-doc-meta { display: flex; flex-wrap: wrap; gap: 6px 10px; margin-top: 7px; }
+        .gu-meta-chip {
+            display: inline-flex; align-items: center; gap: 5px;
+            font-size: 0.72rem; color: #64748b; background: #f8fafc;
+            border: 1px solid #f1f5f9; border-radius: 7px; padding: 3px 9px; font-weight: 600;
+        }
+        .gu-meta-chip i { font-size: 0.68rem; color: #94a3b8; }
+        .gu-meta-chip.branch { color: #1e3a8a; background: #eff6ff; border-color: #dbeafe; }
+        .gu-meta-chip.type { color: #7c3aed; background: #f5f3ff; border-color: #ede9fe; }
+        .gu-doc-action { flex-shrink: 0; }
+        .gu-sign-btn {
+            display: inline-flex; align-items: center; gap: 7px;
+            padding: 10px 18px; border-radius: 10px; border: none;
+            background: var(--primary); color: #fff; font-weight: 600; font-size: 0.8rem;
+            cursor: pointer; transition: all .15s; white-space: nowrap;
+            box-shadow: 0 2px 8px rgba(30,58,138,0.25);
+        }
+        .gu-sign-btn:hover { background: var(--primary-dark); transform: translateY(-1px); box-shadow: 0 4px 14px rgba(30,58,138,0.32); }
+
+        /* ── SIGNING HISTORY ROWS ── */
+        .gu-hist-card {
+            display: flex; align-items: center; gap: 16px;
+            background: #fff; border: 1px solid #eef1f5; border-radius: 14px;
+            padding: 13px 18px; margin-bottom: 9px; transition: border-color .15s, box-shadow .15s;
+        }
+        .gu-hist-card:hover { border-color: #d1fae5; box-shadow: 0 6px 18px -6px rgba(5,150,105,0.12); }
+        .gu-hist-card:last-child { margin-bottom: 0; }
+        .gu-hist-icon {
+            width: 40px; height: 40px; border-radius: 11px; flex-shrink: 0;
+            background: linear-gradient(145deg,#f0fdf4,#dcfce7); color: #059669;
+            display: flex; align-items: center; justify-content: center; font-size: 1rem;
+        }
+        .gu-hist-main { flex: 1; min-width: 0; }
+        .gu-hist-name { font-size: 0.86rem; font-weight: 700; color: #0f172a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .gu-hist-meta { display: flex; flex-wrap: wrap; gap: 6px 10px; margin-top: 6px; }
+        .gu-hist-time { text-align: right; flex-shrink: 0; }
+        .gu-hist-time .gu-hist-date { font-size: 0.78rem; font-weight: 700; color: #334155; }
+        .gu-hist-time .gu-hist-clock { font-size: 0.68rem; color: #94a3b8; margin-top: 2px; }
 
         /* ── DOWNLOAD TOAST ── */
         #downloadToast {
@@ -405,6 +550,8 @@
 <!-- ══ CUSTOM ALERT / CONFIRM DIALOG ══ -->
 <div id="guDialog">
     <div class="gu-dialog-box">
+        <div class="gu-dialog-accent" id="guDialogAccent"></div>
+        <button class="gu-dialog-close" id="guDialogX" title="Close"><i class="fas fa-times"></i></button>
         <div class="gu-dialog-header">
             <div class="gu-dialog-icon" id="guDialogIcon"><i id="guDialogIconI" class="fas fa-info-circle"></i></div>
             <div class="gu-dialog-title" id="guDialogTitle">Notice</div>
@@ -415,30 +562,41 @@
 </div>
 
 <!-- ══ SIGNING HISTORY MODAL ══ -->
-<div id="historyModal" style="display:none; position:fixed; inset:0; background:rgba(10,15,40,0.72); backdrop-filter:blur(3px); z-index:999998; justify-content:center; align-items:center;">
-    <div style="background:#fff; border-radius:18px; width:92%; max-width:720px; max-height:80vh; display:flex; flex-direction:column; box-shadow:0 30px 80px rgba(0,0,0,0.45); overflow:hidden;">
-        <div style="display:flex; align-items:center; justify-content:space-between; padding:18px 24px; border-bottom:1px solid #f1f5f9;">
-            <div style="font-size:1rem; font-weight:700; color:#0f172a;"><i class="fas fa-clock-rotate-left"></i>&nbsp; My Signing History</div>
-            <button onclick="closeSigningHistory()" style="border:none; background:none; font-size:1.1rem; color:#94a3b8; cursor:pointer;"><i class="fas fa-times"></i></button>
+<div id="historyModal" class="gu-modal-overlay">
+    <div class="gu-modal-box" style="max-width:760px;">
+        <div class="gu-modal-accent"></div>
+        <div class="gu-modal-header">
+            <div class="gu-modal-header-left">
+                <div class="gu-modal-icon history"><i class="fas fa-clock-rotate-left"></i></div>
+                <div>
+                    <div class="gu-modal-title">My Signing History</div>
+                    <div class="gu-modal-subtitle">A record of every document you've digitally signed</div>
+                </div>
+            </div>
+            <button class="gu-modal-close" onclick="closeSigningHistory()" title="Close"><i class="fas fa-times"></i></button>
         </div>
-        <div style="padding:16px 24px; overflow-y:auto; flex:1;" id="historyModalBody">
-            <p style="text-align:center; color:#64748b; font-size:0.85rem;"><i class="fas fa-spinner fa-spin"></i> Loading...</p>
+        <div class="gu-modal-body" id="historyModalBody">
+            <div class="gu-modal-loading"><i class="fas fa-spinner fa-spin"></i> Loading your signing history...</div>
         </div>
     </div>
 </div>
 
 <!-- ══ PENDING DOCUMENTS MODAL ══ -->
-<div id="pendingDocsModal" style="display:none; position:fixed; inset:0; background:rgba(10,15,40,0.72); backdrop-filter:blur(3px); z-index:999998; justify-content:center; align-items:center;">
-    <div style="background:#fff; border-radius:18px; width:92%; max-width:760px; max-height:80vh; display:flex; flex-direction:column; box-shadow:0 30px 80px rgba(0,0,0,0.45); overflow:hidden;">
-        <div style="display:flex; align-items:center; justify-content:space-between; padding:18px 24px; border-bottom:1px solid #f1f5f9;">
-            <div>
-                <div style="font-size:1rem; font-weight:700; color:#0f172a;"><i class="fas fa-inbox"></i>&nbsp; Documents Pending Your Signature</div>
-                <div style="font-size:0.74rem; color:#94a3b8; margin-top:2px;">Emp Code: <span id="pendingDocsEmpId">--</span></div>
+<div id="pendingDocsModal" class="gu-modal-overlay">
+    <div class="gu-modal-box" style="max-width:920px;">
+        <div class="gu-modal-accent warning"></div>
+        <div class="gu-modal-header">
+            <div class="gu-modal-header-left">
+                <div class="gu-modal-icon pending"><i class="fas fa-inbox"></i></div>
+                <div>
+                    <div class="gu-modal-title">Documents Pending Your Signature</div>
+                    <div class="gu-modal-subtitle">Emp Code: <span id="pendingDocsEmpId" class="gu-emp-pill">--</span></div>
+                </div>
             </div>
-            <button onclick="closePendingDocs()" style="border:none; background:none; font-size:1.1rem; color:#94a3b8; cursor:pointer;"><i class="fas fa-times"></i></button>
+            <button class="gu-modal-close" onclick="closePendingDocs()" title="Close"><i class="fas fa-times"></i></button>
         </div>
-        <div style="padding:16px 24px; overflow-y:auto; flex:1;" id="pendingDocsModalBody">
-            <p style="text-align:center; color:#64748b; font-size:0.85rem;"><i class="fas fa-spinner fa-spin"></i> Loading...</p>
+        <div class="gu-modal-body" id="pendingDocsModalBody">
+            <div class="gu-modal-loading"><i class="fas fa-spinner fa-spin"></i> Loading your pending documents...</div>
         </div>
     </div>
 </div>
@@ -1134,17 +1292,24 @@ function _openGuDialog(msg, type, buttons) {
         const cfg = DIALOG_ICONS[type] || DIALOG_ICONS.info;
         document.getElementById('guDialogIconI').className = 'fas ' + cfg.icon;
         document.getElementById('guDialogIcon').className  = 'gu-dialog-icon ' + cfg.cls;
+        document.getElementById('guDialogAccent').className = 'gu-dialog-accent ' + cfg.cls;
         document.getElementById('guDialogTitle').textContent = cfg.title;
         document.getElementById('guDialogBody').textContent  = msg;
         const footer = document.getElementById('guDialogFooter');
         footer.innerHTML = '';
+        let settled = false;
+        const settle = (val) => { if (settled) return; settled = true; d.classList.remove('show'); resolve(val); };
         buttons.forEach(b => {
             const btn = document.createElement('button');
             btn.textContent = b.label;
             btn.className   = 'gu-btn ' + b.cls;
-            btn.onclick = () => { d.classList.remove('show'); resolve(b.value); };
+            btn.onclick = () => settle(b.value);
             footer.appendChild(btn);
         });
+        // Close (X) mirrors the dialog's "cancel"/dismiss value — the first button's
+        // value for confirms, or the only button's value (true) for plain alerts.
+        const closeBtn = document.getElementById('guDialogX');
+        closeBtn.onclick = () => settle(buttons[0].value);
         d.classList.add('show');
     });
 }
@@ -2604,7 +2769,7 @@ async function openSigningHistory() {
     const modal = document.getElementById("historyModal");
     const body  = document.getElementById("historyModalBody");
     modal.style.display = "flex";
-    body.innerHTML = `<p style="text-align:center; color:#64748b; font-size:0.85rem;"><i class="fas fa-spinner fa-spin"></i> Loading your signing history...</p>`;
+    body.innerHTML = `<div class="gu-modal-loading"><i class="fas fa-spinner fa-spin"></i> Loading your signing history...</div>`;
 
     try {
         const all  = await _spGetAll("GU_SignedDocs");
@@ -2613,31 +2778,40 @@ async function openSigningHistory() {
             .sort((a, b) => new Date(b.SignedAt) - new Date(a.SignedAt));
 
         if (mine.length === 0) {
-            body.innerHTML = `<p style="text-align:center; color:#64748b; font-size:0.85rem; padding:20px 0;">You haven't signed any documents yet.</p>`;
+            body.innerHTML = `
+                <div class="gu-empty-state">
+                    <div class="gu-empty-icon"><i class="fas fa-file-signature"></i></div>
+                    <div class="gu-empty-title">No signed documents yet</div>
+                    <div class="gu-empty-sub">Documents you sign will show up here for your records.</div>
+                </div>`;
             return;
         }
 
-        const rows = mine.map(r => `
-            <tr>
-                <td style="padding:10px 8px; border-bottom:1px solid #f1f5f9; font-size:0.76rem; color:#0f172a; font-family:monospace; white-space:nowrap;">${r.EventID || "-"}</td>
-                <td style="padding:10px 8px; border-bottom:1px solid #f1f5f9; font-size:0.8rem; color:#334155;">${r.FileName || "-"}</td>
-                <td style="padding:10px 8px; border-bottom:1px solid #f1f5f9; font-size:0.8rem; color:#334155; white-space:nowrap;">${r.SignedAt ? new Date(r.SignedAt).toLocaleString() : "-"}</td>
-            </tr>`).join("");
+        const rows = mine.map(r => {
+            const signedAt = r.SignedAt ? new Date(r.SignedAt) : null;
+            const dateStr  = signedAt ? signedAt.toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' }) : "-";
+            const timeStr  = signedAt ? signedAt.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : "";
+            return `
+            <div class="gu-hist-card">
+                <div class="gu-hist-icon"><i class="fas fa-file-circle-check"></i></div>
+                <div class="gu-hist-main">
+                    <div class="gu-hist-name">${r.FileName || "-"}</div>
+                    <div class="gu-hist-meta">
+                        <span class="gu-meta-chip"><i class="fas fa-fingerprint"></i> ${r.EventID || "-"}</span>
+                    </div>
+                </div>
+                <div class="gu-hist-time">
+                    <div class="gu-hist-date">${dateStr}</div>
+                    <div class="gu-hist-clock">${timeStr}</div>
+                </div>
+            </div>`;
+        }).join("");
 
         body.innerHTML = `
-            <p style="font-size:0.78rem; color:#64748b; margin:0 0 12px;">${mine.length} document${mine.length === 1 ? "" : "s"} signed by you.</p>
-            <table style="width:100%; border-collapse:collapse;">
-                <thead>
-                    <tr>
-                        <th style="text-align:left; padding:8px; font-size:0.68rem; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px; border-bottom:1px solid #e2e8f0;">Verify ID</th>
-                        <th style="text-align:left; padding:8px; font-size:0.68rem; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px; border-bottom:1px solid #e2e8f0;">File</th>
-                        <th style="text-align:left; padding:8px; font-size:0.68rem; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px; border-bottom:1px solid #e2e8f0;">Signed at</th>
-                    </tr>
-                </thead>
-                <tbody>${rows}</tbody>
-            </table>`;
+            <div class="gu-modal-count"><span class="gu-count-num">${mine.length}</span> document${mine.length === 1 ? "" : "s"} signed by you</div>
+            ${rows}`;
     } catch (e) {
-        body.innerHTML = `<p style="text-align:center; color:#ef4444; font-size:0.85rem; padding:20px 0;">Could not load signing history.<br>${e.message}</p>`;
+        body.innerHTML = `<div class="gu-error-state"><i class="fas fa-triangle-exclamation"></i> Could not load signing history.<br>${e.message}</div>`;
     }
 }
 
@@ -2654,7 +2828,7 @@ async function openPendingDocs() {
     const empIdEl = document.getElementById("pendingDocsEmpId");
     if (empIdEl) empIdEl.textContent = currentUser?.empCode || "--";
     modal.style.display = "flex";
-    body.innerHTML = `<p style="text-align:center; color:#64748b; font-size:0.85rem;"><i class="fas fa-spinner fa-spin"></i> Loading your pending documents...</p>`;
+    body.innerHTML = `<div class="gu-modal-loading"><i class="fas fa-spinner fa-spin"></i> Loading your pending documents...</div>`;
 
     try {
         const docs = await fetchMyPendingDocuments();
@@ -2662,14 +2836,19 @@ async function openPendingDocs() {
         renderPendingDocsList(docs);
         updatePendingDocsBadge(docs.length);
     } catch (e) {
-        body.innerHTML = `<p style="text-align:center; color:#ef4444; font-size:0.85rem; padding:20px 0;">Could not load pending documents.<br>${e.message}</p>`;
+        body.innerHTML = `<div class="gu-error-state"><i class="fas fa-triangle-exclamation"></i> Could not load pending documents.<br>${e.message}</div>`;
     }
 }
 
 function renderPendingDocsList(docs) {
     const body = document.getElementById("pendingDocsModalBody");
     if (!docs.length) {
-        body.innerHTML = `<p style="text-align:center; color:#64748b; font-size:0.85rem; padding:20px 0;"><i class="fas fa-circle-check" style="color:#22c55e;"></i> No documents pending your signature right now.</p>`;
+        body.innerHTML = `
+            <div class="gu-empty-state">
+                <div class="gu-empty-icon"><i class="fas fa-circle-check"></i></div>
+                <div class="gu-empty-title">You're all caught up</div>
+                <div class="gu-empty-sub">No documents are pending your signature right now.</div>
+            </div>`;
         return;
     }
     const rows = docs.map(d => {
@@ -2678,34 +2857,28 @@ function renderPendingDocsList(docs) {
         const branch  = _ffield(f, "Branch_Name") || "-";
         const reqBy   = _ffield(f, "Requested_By") || "-";
         const docType = _ffield(f, "Document_Type") || "-";
-        const safeName = (d.name || "").replace(/'/g, "\\'");
         return `
-        <tr>
-            <td style="padding:10px 8px; border-bottom:1px solid #f1f5f9; font-size:0.8rem; color:#0f172a;"><i class="fas fa-file-pdf" style="color:#ef4444;"></i> ${d.name}</td>
-            <td style="padding:10px 8px; border-bottom:1px solid #f1f5f9; font-size:0.78rem; color:#334155;">${refId}</td>
-            <td style="padding:10px 8px; border-bottom:1px solid #f1f5f9; font-size:0.78rem; color:#334155;">${branch}</td>
-            <td style="padding:10px 8px; border-bottom:1px solid #f1f5f9; font-size:0.78rem; color:#334155;">${reqBy}</td>
-            <td style="padding:10px 8px; border-bottom:1px solid #f1f5f9; font-size:0.78rem; color:#334155;">${docType}</td>
-            <td style="padding:10px 8px; border-bottom:1px solid #f1f5f9;">
-                <button class="btn btn-primary" style="width:auto; padding:7px 14px; font-size:0.78rem;" onclick="loadPendingDocIntoViewer('${d.id}')">
+        <div class="gu-doc-card">
+            <div class="gu-doc-icon"><i class="fas fa-file-pdf"></i></div>
+            <div class="gu-doc-main">
+                <div class="gu-doc-name" title="${d.name}">${d.name}</div>
+                <div class="gu-doc-meta">
+                    <span class="gu-meta-chip"><i class="fas fa-hashtag"></i> Ref ${refId}</span>
+                    <span class="gu-meta-chip branch"><i class="fas fa-location-dot"></i> ${branch}</span>
+                    <span class="gu-meta-chip"><i class="fas fa-user"></i> ${reqBy}</span>
+                    <span class="gu-meta-chip type"><i class="fas fa-tag"></i> ${docType}</span>
+                </div>
+            </div>
+            <div class="gu-doc-action">
+                <button class="gu-sign-btn" onclick="loadPendingDocIntoViewer('${d.id}')">
                     <i class="fas fa-pen"></i> Open to Sign
                 </button>
-            </td>
-        </tr>`;
+            </div>
+        </div>`;
     }).join("");
     body.innerHTML = `
-        <p style="font-size:0.78rem; color:#64748b; margin:0 0 12px;">${docs.length} document${docs.length === 1 ? "" : "s"} waiting for your signature.</p>
-        <table style="width:100%; border-collapse:collapse;">
-            <thead><tr>
-                <th style="text-align:left; padding:8px; font-size:0.68rem; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px; border-bottom:1px solid #e2e8f0;">File</th>
-                <th style="text-align:left; padding:8px; font-size:0.68rem; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px; border-bottom:1px solid #e2e8f0;">Ref ID</th>
-                <th style="text-align:left; padding:8px; font-size:0.68rem; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px; border-bottom:1px solid #e2e8f0;">Branch</th>
-                <th style="text-align:left; padding:8px; font-size:0.68rem; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px; border-bottom:1px solid #e2e8f0;">Requested By</th>
-                <th style="text-align:left; padding:8px; font-size:0.68rem; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px; border-bottom:1px solid #e2e8f0;">Document Type</th>
-                <th style="text-align:left; padding:8px; font-size:0.68rem; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px; border-bottom:1px solid #e2e8f0;"></th>
-            </tr></thead>
-            <tbody>${rows}</tbody>
-        </table>`;
+        <div class="gu-modal-count"><span class="gu-count-num">${docs.length}</span> document${docs.length === 1 ? "" : "s"} waiting for your signature</div>
+        ${rows}`;
 }
 
 function closePendingDocs() {
