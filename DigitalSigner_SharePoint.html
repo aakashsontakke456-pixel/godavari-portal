@@ -2079,8 +2079,8 @@ function launchMainApp() {
     refreshSignatureUI();
     startIdleTimer();
 
-    // Pending Documents To Sign — populate the header bell badge count
-    refreshPendingDocsBadge();
+    // Pending Documents To Sign — badge count + a one-time warning popup if any exist
+    checkPendingDocsOnLogin();
 }
 
 // ── Idle session auto-logout ──
@@ -2672,6 +2672,23 @@ async function refreshPendingDocsBadge() {
         const docs = await fetchMyPendingDocuments();
         updatePendingDocsBadge(docs.length);
     } catch (e) { /* silent — badge just won't update */ }
+}
+
+// ── Run once right after login: updates the bell badge, and — only if there are
+//    documents waiting — pops up a warning so the manager can't miss it. Stays
+//    silent (no popup) when there's nothing pending.
+async function checkPendingDocsOnLogin() {
+    try {
+        const docs = await fetchMyPendingDocuments();
+        updatePendingDocsBadge(docs.length);
+        if (docs.length > 0) {
+            const viewNow = await guConfirm(
+                `You have ${docs.length} document${docs.length === 1 ? "" : "s"} pending your signature.\n\nWould you like to review and sign ${docs.length === 1 ? "it" : "them"} now?`,
+                'warning', 'View Now', 'Later'
+            );
+            if (viewNow) openPendingDocs();
+        }
+    } catch (e) { /* silent — don't block login over this */ }
 }
 
 // ── Pull a SharePoint-pending PDF's bytes into the existing viewer/signing flow,
