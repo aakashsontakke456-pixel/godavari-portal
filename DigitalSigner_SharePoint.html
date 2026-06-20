@@ -2496,15 +2496,21 @@ async function submitSignedDocumentToSharePoint() {
     const result = await _buildSignedPdf();
     if (!result) return;
 
-    const btn = document.getElementById("finalizeBtn");
-    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Updating SharePoint...'; }
+    // NOTE: update the icon/label elements directly — do NOT overwrite btn.innerHTML,
+    // since #finalizeBtnIcon / #finalizeBtnLabel live inside it and innerHTML would
+    // delete those nodes, breaking the later updateFinalizeButtonForSource() call.
+    const btn      = document.getElementById("finalizeBtn");
+    const btnIcon  = document.getElementById("finalizeBtnIcon");
+    const btnLabel = document.getElementById("finalizeBtnLabel");
+    if (btn) btn.disabled = true;
+    if (btnIcon)  btnIcon.className  = "fas fa-spinner fa-spin";
+    if (btnLabel) btnLabel.textContent = "Updating SharePoint...";
 
     try {
         await _replaceDriveItemContent(source.driveId, source.itemId, result.bytes);
         await _markDocSigned(source.driveId, source.itemId, source.statusFieldKey);
 
         currentSigningSource = null;
-        updateFinalizeButtonForSource();
         refreshPendingDocsBadge();
 
         const wantsCopy = await guConfirm(
@@ -2521,7 +2527,7 @@ async function submitSignedDocumentToSharePoint() {
         );
         _triggerBrowserDownload(result.bytes, result.fileName);
     } finally {
-        if (btn) { btn.disabled = false; }
+        if (btn) btn.disabled = false;
         updateFinalizeButtonForSource();
     }
 }
