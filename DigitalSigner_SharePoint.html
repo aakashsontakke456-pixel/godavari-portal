@@ -1174,6 +1174,16 @@ function showDownloadToast(fileName) {
     toast._t = setTimeout(() => toast.classList.remove('show'), 4500);
 }
 
+// ── Confirms the signed document was saved back to SharePoint (used when the
+//    user clicks "Done" instead of downloading a copy) ──
+function showSavedToast(fileName) {
+    const toast = document.getElementById('downloadToast');
+    document.getElementById('downloadToastMsg').textContent = 'Saved to SharePoint: ' + fileName;
+    toast.classList.add('show');
+    clearTimeout(toast._t);
+    toast._t = setTimeout(() => toast.classList.remove('show'), 4500);
+}
+
 // ═══════════════════════════════════════════════════════════════
 //  STATE
 // ═══════════════════════════════════════════════════════════════
@@ -2525,7 +2535,12 @@ async function submitSignedDocumentToSharePoint() {
             `"${source.fileName}" has been signed and updated in SharePoint.\nDocument_DigiSign_Status is now "${STATUS_SIGNED}".\n\nWould you like to download a copy for your records?`,
             'success', 'Download a Copy', 'Done'
         );
-        if (wantsCopy) _triggerBrowserDownload(result.bytes, result.fileName);
+        if (wantsCopy) {
+            _triggerBrowserDownload(result.bytes, result.fileName);
+        } else {
+            showSavedToast(source.fileName);
+        }
+        clearViewerAfterCompletion();
 
     } catch (e) {
         await guAlert(
@@ -2547,6 +2562,37 @@ async function handleFinalizeClick() {
     } else {
         await downloadPDF();
     }
+}
+
+// ── After a successful sign-and-save to SharePoint, empty the viewer back to
+//    its blank starting state (no leftover PDF/signature on screen), without
+//    touching login session, signature registration, or pending-docs badge.
+function clearViewerAfterCompletion() {
+    pdfBytes  = null;
+    pdfDocJS  = null;
+    pageNum   = 1;
+    currentSigningSource = null;
+
+    const canv = document.getElementById("pdfCanvas");
+    if (canv) {
+        const ctx2 = canv.getContext("2d");
+        ctx2.clearRect(0, 0, canv.width, canv.height);
+        canv.width  = 0;
+        canv.height = 0;
+    }
+
+    const pdfInput = document.getElementById("pdfUpload");
+    if (pdfInput) pdfInput.value = "";
+
+    const dragSig = document.getElementById("dragSigContainer");
+    if (dragSig) dragSig.style.display = "none";
+
+    const pgNum   = document.getElementById("pgNum");
+    const pgTotal = document.getElementById("pgTotal");
+    if (pgNum)   pgNum.innerText   = "1";
+    if (pgTotal) pgTotal.innerText = "1";
+
+    updateFinalizeButtonForSource();
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -2630,12 +2676,16 @@ function renderPendingDocsList(docs) {
         const f = d.listItem?.fields || {};
         const refId   = _ffield(f, "Ref_ID") || "-";
         const branch  = _ffield(f, "Branch_Name") || "-";
+        const reqBy   = _ffield(f, "Requested_By") || "-";
+        const docType = _ffield(f, "Document_Type") || "-";
         const safeName = (d.name || "").replace(/'/g, "\\'");
         return `
         <tr>
             <td style="padding:10px 8px; border-bottom:1px solid #f1f5f9; font-size:0.8rem; color:#0f172a;"><i class="fas fa-file-pdf" style="color:#ef4444;"></i> ${d.name}</td>
             <td style="padding:10px 8px; border-bottom:1px solid #f1f5f9; font-size:0.78rem; color:#334155;">${refId}</td>
             <td style="padding:10px 8px; border-bottom:1px solid #f1f5f9; font-size:0.78rem; color:#334155;">${branch}</td>
+            <td style="padding:10px 8px; border-bottom:1px solid #f1f5f9; font-size:0.78rem; color:#334155;">${reqBy}</td>
+            <td style="padding:10px 8px; border-bottom:1px solid #f1f5f9; font-size:0.78rem; color:#334155;">${docType}</td>
             <td style="padding:10px 8px; border-bottom:1px solid #f1f5f9;">
                 <button class="btn btn-primary" style="width:auto; padding:7px 14px; font-size:0.78rem;" onclick="loadPendingDocIntoViewer('${d.id}')">
                     <i class="fas fa-pen"></i> Open to Sign
@@ -2650,6 +2700,8 @@ function renderPendingDocsList(docs) {
                 <th style="text-align:left; padding:8px; font-size:0.68rem; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px; border-bottom:1px solid #e2e8f0;">File</th>
                 <th style="text-align:left; padding:8px; font-size:0.68rem; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px; border-bottom:1px solid #e2e8f0;">Ref ID</th>
                 <th style="text-align:left; padding:8px; font-size:0.68rem; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px; border-bottom:1px solid #e2e8f0;">Branch</th>
+                <th style="text-align:left; padding:8px; font-size:0.68rem; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px; border-bottom:1px solid #e2e8f0;">Requested By</th>
+                <th style="text-align:left; padding:8px; font-size:0.68rem; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px; border-bottom:1px solid #e2e8f0;">Document Type</th>
                 <th style="text-align:left; padding:8px; font-size:0.68rem; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px; border-bottom:1px solid #e2e8f0;"></th>
             </tr></thead>
             <tbody>${rows}</tbody>
