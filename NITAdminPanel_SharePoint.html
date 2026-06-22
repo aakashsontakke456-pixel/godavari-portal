@@ -3390,7 +3390,7 @@ const CLIENT_ID            = "106f2386-db75-436c-8e08-21c2ea14958e";   // ✅ Az
 const TENANT_ID            = "e47e4128-1c1b-4510-a440-415145dc1cde";   // ✅ Azure Tenant ID
 const SHAREPOINT_HOST      = "godavariurban.sharepoint.com";             // ✅ SharePoint host
 const SHAREPOINT_SITE_NAME = "GUMCCSLFDCOMMISTION";                      // ✅ SharePoint site name
-const BRANCH_APP_URL       = "https://aakashsontakke456-pixel.github.io/godavari-portal/DigitalSigner_SharePoint.html"; // ✅ Branch app GitHub Pages URL
+const BRANCH_APP_URL       = "https://godavari-urban.github.io/godavariurban-portal/DigitalSigner_SharePoint.html"; // ✅ Branch app GitHub Pages URL
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ── Derived constants (do not edit)
@@ -3400,13 +3400,13 @@ const SP_SITE_PATH = `/sites/${SHAREPOINT_HOST}:/sites/${SHAREPOINT_SITE_NAME}`;
 // ── MSAL Configuration
 // For popup flows in MSAL v3, use the page's own URL as redirectUri.
 // The popup closes itself after auth — it never fully reloads the app.
-const _blankRedirectUri = "https://aakashsontakke456-pixel.github.io/godavari-portal/redirect.html";
+const _blankRedirectUri = "https://godavari-urban.github.io/godavariurban-portal/redirect.html";
 
 const msalConfig = {
     auth: {
         clientId: CLIENT_ID,
         authority: `https://login.microsoftonline.com/${TENANT_ID}`,
-        redirectUri: "https://aakashsontakke456-pixel.github.io/godavari-portal/redirect.html",
+        redirectUri: "https://godavari-urban.github.io/godavariurban-portal/redirect.html",
         navigateToLoginRequestUrl: false
     },
     cache: { cacheLocation: "sessionStorage", storeAuthStateInCookie: true },
@@ -3465,7 +3465,13 @@ async function getToken(scopeOverride) {
 }
 
 // ── Graph API helper
-async function graphRequest(method, endpoint, body = null) {
+//    Retries automatically on HTTP 429 (throttled) and 503/504 (transient
+//    server hiccups), which Microsoft Graph can return during bulk batches.
+//    Honors the server's Retry-After header when present, otherwise backs
+//    off 1s → 2s → 4s. After MAX_GRAPH_RETRIES attempts it gives up and
+//    throws, same as before — callers' existing try/catch still works.
+const MAX_GRAPH_RETRIES = 4;
+async function graphRequest(method, endpoint, body = null, _attempt = 0) {
     const token = await getToken();
     const opts = {
         method,
@@ -3473,7 +3479,14 @@ async function graphRequest(method, endpoint, body = null) {
     };
     if (body) opts.body = JSON.stringify(body);
     const res = await fetch(GRAPH + endpoint, opts);
+
     if (!res.ok) {
+        if ((res.status === 429 || res.status === 503 || res.status === 504) && _attempt < MAX_GRAPH_RETRIES) {
+            const retryAfterHeader = parseInt(res.headers.get("Retry-After"), 10);
+            const waitMs = !isNaN(retryAfterHeader) ? retryAfterHeader * 1000 : Math.pow(2, _attempt) * 1000;
+            await new Promise(r => setTimeout(r, waitMs));
+            return graphRequest(method, endpoint, body, _attempt + 1);
+        }
         const err = await res.json().catch(() => ({}));
         throw new Error(err?.error?.message || `Graph API error ${res.status}`);
     }
@@ -3489,12 +3502,15 @@ async function getSiteId() {
     return _spSiteId;
 }
 
-// ── Get a SharePoint List ID by name
+// ── Get a SharePoint List ID by name (cached per list — IDs never change)
+const _listIdCache = {};
 async function getListId(listName) {
+    if (_listIdCache[listName]) return _listIdCache[listName];
     const siteId = await getSiteId();
     const data = await graphRequest("GET", `/sites/${siteId}/lists?$filter=displayName eq '${listName}'`);
     if (!data.value || data.value.length === 0) throw new Error(`List "${listName}" not found in SharePoint site.`);
-    return data.value[0].id;
+    _listIdCache[listName] = data.value[0].id;
+    return _listIdCache[listName];
 }
 
 // ── FIELD MAPPING ──────────────────────────────────────────────────────────────
@@ -3711,10 +3727,35 @@ async function spReadAll(listName, selectFields = null) {
 }
 
 // ── Find one item by field value
-// NOTE: SharePoint internally renames custom columns (e.g. EmpID → field_1),
-// so $filter on display names fails silently (returns 0 results, not an error).
-// We always fetch all items and filter client-side to guarantee correct matching.
+// SharePoint renames custom columns internally (e.g. EmpID → field_1), so a
+// $filter using the display name ("EmpID") returns 0 results — it has to use
+// the real internal name. We look that up from the existing write-map and
+// filter server-side, which only pulls back the ONE matching item instead of
+// downloading the entire list (this used to call spReadAll() every time,
+// which got slower with every branch added). If the internal name isn't
+// known for a list, or the server-side filter throws, we fall back to the
+// original "download everything, filter in the browser" approach so nothing
+// breaks for lists we haven't mapped.
 async function spFindItem(listName, fieldName, value) {
+    const writeMap = _getWriteMap(listName);
+    const internalName = writeMap[fieldName];
+    const safeValue = String(value ?? "").trim().replace(/'/g, "''"); // escape quotes for OData
+
+    if (internalName) {
+        try {
+            const siteId = await getSiteId();
+            const listId = await getListId(listName);
+            const url = `/sites/${siteId}/lists/${listId}/items?$expand=fields&$filter=fields/${internalName} eq '${safeValue}'&$top=1`;
+            const data = await graphRequest("GET", url);
+            if (data.value && data.value.length > 0) {
+                return { _spId: data.value[0].id, ...spFieldsFromSP(listName, data.value[0].fields) };
+            }
+            return null;
+        } catch (e) {
+            // Server-side filter failed (e.g. column not filterable) — fall through to the safe client-side scan below.
+        }
+    }
+
     const all = await spReadAll(listName);
     return all.find(i => String(i[fieldName] ?? "").trim() === String(value ?? "").trim()) || null;
 }
@@ -5796,7 +5837,10 @@ async function bulkUpload() {
         }
         log.scrollTop = log.scrollHeight;
         updateBulkProgress(i + 1, csvParsed.length, b.Branch, "Completed");
-        await new Promise(r => setTimeout(r, 400));
+        // Small pacing pause between rows — keeps requests from hitting Graph
+        // back-to-back-to-back. graphRequest() above already retries on 429s,
+        // so this is just a light buffer, not the main safety net.
+        await new Promise(r => setTimeout(r, 250));
     }
 
     log.innerHTML += `\n<span style="color:var(--yellow)">═══ DONE: ${success} added, ${fail} failed, ${emailFail} email issue(s) ═══</span>\n`;

@@ -384,7 +384,7 @@
                 <i class="fas fa-exclamation-circle"></i> <span id="passwordErrorMsg"></span>
             </div>
             <div style="text-align:right; margin-top:8px;">
-                <span onclick="switchToEmpIdMode()" style="color:#64748b; font-size:0.72rem; text-decoration:underline; cursor:pointer;">Use Employee ID instead</span>
+                <span style="color:#64748b; font-size:0.72rem;">Forgot password? Contact IT Department.</span>
             </div>
         </div>
 
@@ -1517,6 +1517,14 @@ function showIPBlockedError() {
 //  APP INIT — show Microsoft sign-in screen, check for cached session
 // ═══════════════════════════════════════════════════════════════
 async function initApp() {
+    // Snapshot the pristine login form markup once, before anything (like the
+    // "Pending IT Authorization" screen) ever overwrites #authOverlay .auth-box.
+    // forceLogout() uses this to restore the real login form on next logout.
+    if (!window._authBoxOriginalHTML) {
+        const box0 = document.querySelector("#authOverlay .auth-box");
+        if (box0) window._authBoxOriginalHTML = box0.innerHTML;
+    }
+
     // Always show auth overlay (Microsoft sign-in) first
     document.getElementById("authOverlay").style.display  = "flex";
     document.getElementById("mainApp").style.display      = "none";
@@ -2282,6 +2290,11 @@ function forceLogout() {
     currentUser = null;
     clearTimeout(idleTimer);
 
+    // Clear any leftover "pending IT authorization" state from a previous attempt
+    _pendingBranchItem = null;
+    _pendingEmail      = null;
+    _pendingMe         = null;
+
     // ── Clear document state so next login starts fresh ──
     pdfBytes   = null;
     pdfDocJS   = null;
@@ -2323,7 +2336,16 @@ function forceLogout() {
     if (pgTotal) pgTotal.innerText = "1";
 
     document.getElementById("mainApp").style.display      = "none";
+
+    // If the "Pending IT Authorization" screen had replaced the login form's
+    // markup, restore the real login form before showing the overlay again.
+    const authBox = document.querySelector("#authOverlay .auth-box");
+    if (authBox && window._authBoxOriginalHTML) {
+        authBox.innerHTML = window._authBoxOriginalHTML;
+    }
     document.getElementById("authOverlay").style.display  = "flex";
+    updateAuthFieldsUI();
+
     // Clear any error from previous session
     const errEl = document.getElementById("signInError");
     if (errEl) errEl.style.display = "none";
