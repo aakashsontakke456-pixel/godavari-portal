@@ -1636,6 +1636,7 @@ const SP_CONFIG = {
 
   SITE_URL:   "https://godavariurban.sharepoint.com/sites/COHREPORT",
   LIST_NAME:  "EMPLOGINDATA",
+  WORKLOG_LIST_NAME: "COH DAILY PRODUCTIVITY REPORT",
   TENANT_HOST:"godavariurban.sharepoint.com",
 
   // SP REST token (for /_api/ calls) — must be SP-resource scoped, NOT Graph
@@ -1654,6 +1655,42 @@ const SP_CONFIG = {
   get LIST_API()  { return `${this.SITE_URL}/_api/web/lists/getbytitle('${this.LIST_NAME}')`; },
   get ITEMS_URL() { return `${this.LIST_API}/items`; }
 };
+
+const FieldNames = (() => {
+  function key(value) {
+    return String(value || "")
+      .toLowerCase()
+      .replace(/_x0020_/g, "")
+      .replace(/_x005f_/g, "")
+      .replace(/[^a-z0-9]/g, "");
+  }
+
+  function buildLookup(cols) {
+    const map = {};
+    (cols || []).forEach(c => {
+      [c.Title, c.InternalName, c.displayName, c.name].forEach(name => {
+        const k = key(name);
+        const internal = c.InternalName || c.name;
+        if (k && internal && !map[k]) map[k] = internal;
+      });
+    });
+    return map;
+  }
+
+  function pick(cols, ...names) {
+    const map = buildLookup(cols);
+    const direct = names.map(key).map(k => map[k]).find(Boolean);
+    if (direct) return direct;
+    const wanted = names.map(key).filter(Boolean);
+    const partial = (cols || []).find(c => {
+      const candidates = [c.Title, c.InternalName, c.displayName, c.name].map(key);
+      return wanted.some(w => candidates.some(v => v && (v.includes(w) || w.includes(v))));
+    });
+    return partial ? (partial.InternalName || partial.name) : null;
+  }
+
+  return { key, buildLookup, pick };
+})();
 
 // SharePoint internal field names (verified from list column names in SP UI)
 // ID col in SP UI = "EMP-021" → that's the list's Title field or a custom "ID" text column
@@ -1815,6 +1852,101 @@ const SPConnection = (() => {
   }
 
   return { getStatus, setStatus, onChange };
+})();
+
+// ── Microsoft Graph list helper (browser-safe for GitHub Pages) ─────────
+const GraphAPI = (() => {
+  const ROOT = "https://graph.microsoft.com/v1.0";
+  let _siteId = null;
+  const _lists = new Map();
+  const _columns = new Map();
+
+  async function _headers(write = false) {
+    const token = await MSALAuth.getGraphToken();
+    if (!token) throw new Error("Microsoft Graph token unavailable");
+    const h = { "Authorization": `Bearer ${token}` };
+    if (write) h["Content-Type"] = "application/json";
+    return h;
+  }
+
+  async function _fetch(path, options = {}) {
+    const h = await _headers(!!options.body);
+    const r = await fetch(`${ROOT}${path}`, { ...options, headers: { ...h, ...(options.headers || {}) } });
+    if (!r.ok) throw new Error(`Graph ${r.status}: ${await r.text()}`);
+    if (r.status === 204) return null;
+    return await r.json();
+  }
+
+  async function siteId() {
+    if (_siteId) return _siteId;
+    const site = await _fetch(`/sites/${SP_CONFIG.TENANT_HOST}:/sites/COHREPORT?$select=id,displayName,webUrl`);
+    _siteId = site.id;
+    return _siteId;
+  }
+
+  async function listInfo(listName) {
+    if (_lists.has(listName)) return _lists.get(listName);
+    const sid = await siteId();
+    const data = await _fetch(`/sites/${sid}/lists?$select=id,displayName,name,webUrl`);
+    const wanted = FieldNames.key(listName);
+    const list = (data.value || []).find(l =>
+      FieldNames.key(l.displayName) === wanted || FieldNames.key(l.name) === wanted
+    );
+    if (!list) throw new Error(`Graph list not found: ${listName}`);
+    _lists.set(listName, list);
+    return list;
+  }
+
+  async function columns(listName) {
+    if (_columns.has(listName)) return _columns.get(listName);
+    const sid = await siteId();
+    const list = await listInfo(listName);
+    const data = await _fetch(`/sites/${sid}/lists/${list.id}/columns?$select=name,displayName,columnGroup`);
+    const cols = data.value || [];
+    _columns.set(listName, cols);
+    return cols;
+  }
+
+  async function items(listName, top = 500) {
+    const sid = await siteId();
+    const list = await listInfo(listName);
+    const cols = await columns(listName);
+    const data = await _fetch(`/sites/${sid}/lists/${list.id}/items?$top=${top}&$expand=fields`);
+    return {
+      items: (data.value || []).map(item => ({ ID: item.id, ...item.fields, _graphId: item.id })),
+      columns: cols,
+      list
+    };
+  }
+
+  async function createItem(listName, fields) {
+    const sid = await siteId();
+    const list = await listInfo(listName);
+    const created = await _fetch(`/sites/${sid}/lists/${list.id}/items`, {
+      method: "POST",
+      body: JSON.stringify({ fields })
+    });
+    return { ID: created.id, ...(created.fields || {}), _graphId: created.id };
+  }
+
+  async function updateItem(listName, itemId, fields) {
+    const sid = await siteId();
+    const list = await listInfo(listName);
+    await _fetch(`/sites/${sid}/lists/${list.id}/items/${itemId}/fields`, {
+      method: "PATCH",
+      body: JSON.stringify(fields)
+    });
+    return true;
+  }
+
+  async function deleteItem(listName, itemId) {
+    const sid = await siteId();
+    const list = await listInfo(listName);
+    await _fetch(`/sites/${sid}/lists/${list.id}/items/${itemId}`, { method: "DELETE" });
+    return true;
+  }
+
+  return { items, columns, createItem, updateItem, deleteItem };
 })();
 
 // ── SP REST helper (uses Bearer token from MSAL) ─────────────────────────
@@ -1998,6 +2130,10 @@ const PhotoCache = (() => {
   async function getBlobUrl(photoUrl) {
     if (!photoUrl) return null;
     if (_cache.has(photoUrl)) return _cache.get(photoUrl);
+    if (/^https:\/\/[^/]*sharepoint\.com\//i.test(photoUrl)) {
+      _cache.set(photoUrl, photoUrl);
+      return photoUrl;
+    }
     try {
       const token = await MSALAuth.getToken();
       if (!token) { _cache.set(photoUrl, null); return null; }
@@ -2109,6 +2245,26 @@ function _initialsOf(name) {
   return (parts[0]?.[0] || "") + (parts[1]?.[0] || "");
 }
 
+function _employeeFieldMapFromColumns(cols) {
+  return {
+    raw: cols,
+    employeeId:  FieldNames.pick(cols, "employeeid", "employee_id", "employee id", "emp code", "empcode") || "EMPLOYEE_ID",
+    empName:     FieldNames.pick(cols, "empname", "emp_name", "employee name", "employeename") || "EMP_NAME",
+    empPassword: FieldNames.pick(cols, "emppassword", "emp_password", "password") || "EMP_PASSWORD",
+    deptList:    FieldNames.pick(cols, "departmentlist", "department_list", "department list", "departments") || "Department_List",
+    designation: FieldNames.pick(cols, "empdesignation", "emp_designation", "empdesignati", "designation") || "EMP_DESIGNATI",
+    role:        FieldNames.pick(cols, "role") || "Role",
+    isPresent:   FieldNames.pick(cols, "ispresenttoday", "ispresent") || "IsPresentToday",
+    attendance:  FieldNames.pick(cols, "attendancedisplaystatus", "attendancedisplay", "attendancedisp") || "AttendanceDis0",
+    targetCount: FieldNames.pick(cols, "targetcount", "target_count", "target count") || "Target_count",
+    targetCash:  FieldNames.pick(cols, "targetcountcashverification", "target_count_cashverification", "targetcountcas", "target_count_cas", "target count cas"),
+    lastLogin:   FieldNames.pick(cols, "lastlogindate", "lastlogin", "last login date") || "LastLoginDate",
+    photoUrl:    FieldNames.pick(cols, "photourl", "employeephoto", "employee photo", "photo") || "PhotoURL",
+    officialMail:FieldNames.pick(cols, "officialmail", "official_mail", "official email") || "Official_mail",
+    title:       "Title"
+  };
+}
+
 // =====================================================================
 // DATA STORE (SharePoint + localStorage hybrid)
 // =====================================================================
@@ -2217,7 +2373,6 @@ const Store = (() => {
 
     await _loadFromSP();
     if (!_readLocal(STORAGE_KEYS.SEEDED, false)) {
-      _writeLocal(STORAGE_KEYS.WORKLOGS, []);
       _writeLocal(STORAGE_KEYS.SEEDED, true);
     }
     return "ok";
@@ -2280,7 +2435,6 @@ const Store = (() => {
         btn.textContent = "Loading SharePoint data…";
         await _loadFromSP();
         if (!_readLocal(STORAGE_KEYS.SEEDED, false)) {
-          _writeLocal(STORAGE_KEYS.WORKLOGS, []);
           _writeLocal(STORAGE_KEYS.SEEDED, true);
         }
         App.boot();
@@ -2301,7 +2455,18 @@ const Store = (() => {
 
   async function _loadFromSP() {
     try {
-      const { items, fieldMap } = await SPAPI.getItems();
+      let items, fieldMap;
+      try {
+        const graphEmployees = await GraphAPI.items(SP_CONFIG.LIST_NAME);
+        items = graphEmployees.items;
+        fieldMap = _employeeFieldMapFromColumns(graphEmployees.columns);
+        console.log("Employees loaded via Microsoft Graph:", items.length, fieldMap);
+      } catch (graphErr) {
+        console.warn("Graph employee fetch failed; trying SharePoint REST fallback:", graphErr.message);
+        const restEmployees = await SPAPI.getItems();
+        items = restEmployees.items;
+        fieldMap = restEmployees.fieldMap;
+      }
       _fieldMap = fieldMap;
       _empCache = items.map(item => _spItemToEmployee(item, _fieldMap));
       // Merge seed-only entries (Chief Manager etc.) not in SP
@@ -2311,6 +2476,7 @@ const Store = (() => {
         }
       });
       _writeLocal(STORAGE_KEYS.EMPLOYEES_CACHE, _empCache);
+      await _loadWorkLogsFromGraph();
       _spAvailable = true;
       SPConnection.setStatus("live");
       // Load profile photos with auth token in background
@@ -2323,6 +2489,68 @@ const Store = (() => {
       SPConnection.setStatus("offline");
       // Do NOT fall back to local/seed data — throw so callers can show an error
       throw err;
+    }
+  }
+
+  function _workLogFromGraphItem(item, cols) {
+    const f = {
+      employeeName: FieldNames.pick(cols, "employee name", "employeename", "emp name", "empname"),
+      employeeId:   FieldNames.pick(cols, "emp code", "empcode", "employee code", "employeeid", "employee id"),
+      date:         FieldNames.pick(cols, "date"),
+      designation:  FieldNames.pick(cols, "designation"),
+      departments:  FieldNames.pick(cols, "departments", "department list"),
+      department:   FieldNames.pick(cols, "department"),
+      total:        FieldNames.pick(cols, "total file done", "totalfiledone", "total files", "total"),
+      taskType:     FieldNames.pick(cols, "task type", "tasktype"),
+      approval:     FieldNames.pick(cols, "approval status", "approvalstatus", "status")
+    };
+    const get = key => f[key] ? item[f[key]] : undefined;
+    const deptName = (get("department") || get("departments") || "").toString().trim();
+    const dept = DEPARTMENT_SCHEMA.departments.find(d =>
+      FieldNames.key(d.name) === FieldNames.key(deptName) ||
+      FieldNames.key(deptName).includes(FieldNames.key(d.name)) ||
+      FieldNames.key(d.name).includes(FieldNames.key(deptName))
+    );
+    const dateRaw = get("date");
+    const date = dateRaw ? String(dateRaw).slice(0, 10) : Utils.todayISO();
+    const total = Number(get("total") || 0);
+    const employeeId = String(get("employeeId") || "").trim();
+    const employee = employeeId ? _empCache.find(e => FieldNames.key(e.id) === FieldNames.key(employeeId)) : null;
+    const taskFields = {};
+    (cols || []).forEach(c => {
+      const name = c.name || c.InternalName;
+      const display = c.displayName || c.Title || name;
+      const value = item[name];
+      if (typeof value === "number" && name !== f.total) taskFields[display] = value;
+    });
+    return {
+      id: `SPLOG-${item._graphId || item.ID}`,
+      spId: item._graphId || item.ID,
+      employeeId: employeeId || (employee ? employee.id : ""),
+      employeeName: String(get("employeeName") || (employee ? employee.name : "") || "").trim(),
+      date,
+      departmentKey: dept ? dept.key : "",
+      departmentName: dept ? dept.name : deptName,
+      designation: String(get("designation") || (employee ? employee.designation : "") || "").trim(),
+      totalFileDone: total,
+      fields: taskFields,
+      totalWorkingMinutes: null,
+      productivityPct: employee && dept ? Utils.computeProductivity(dept.key, total, employee) : null,
+      approvalStatus: String(get("approval") || "Approved"),
+      createdAt: date
+    };
+  }
+
+  async function _loadWorkLogsFromGraph() {
+    try {
+      const { items, columns } = await GraphAPI.items(SP_CONFIG.WORKLOG_LIST_NAME);
+      const logs = items.map(item => _workLogFromGraphItem(item, columns));
+      _writeLocal(STORAGE_KEYS.WORKLOGS, logs);
+      console.log("Work logs loaded via Microsoft Graph:", logs.length);
+      return logs;
+    } catch (err) {
+      console.warn("Graph work-log fetch failed; keeping local work-log cache:", err.message);
+      return _readLocal(STORAGE_KEYS.WORKLOGS, []);
     }
   }
 
@@ -2357,15 +2585,24 @@ const Store = (() => {
     const existing = _empCache.find(e => e.id === emp.id);
     if (_spAvailable) {
       try {
-        const body = _employeeToSpBody(emp);
+        const body = _employeeToSpBody(emp, _fieldMap);
         if (existing && existing.spId) {
           // Update existing SP item
-          await SPAPI.updateItem(existing.spId, body);
+          try { await GraphAPI.updateItem(SP_CONFIG.LIST_NAME, existing.spId, body); }
+          catch (graphErr) {
+            console.warn("Graph employee update failed; trying SharePoint REST fallback:", graphErr.message);
+            await SPAPI.updateItem(existing.spId, body);
+          }
           const idx = _empCache.findIndex(e => e.id === emp.id);
           _empCache[idx] = { ..._empCache[idx], ...emp, spId: existing.spId };
         } else {
           // Create new SP item
-          const created = await SPAPI.createItem(body);
+          let created;
+          try { created = await GraphAPI.createItem(SP_CONFIG.LIST_NAME, body); }
+          catch (graphErr) {
+            console.warn("Graph employee create failed; trying SharePoint REST fallback:", graphErr.message);
+            created = await SPAPI.createItem(body);
+          }
           const newEmp = { ...emp, spId: created.ID };
           _empCache.push(newEmp);
         }
@@ -2390,7 +2627,11 @@ const Store = (() => {
     if (!emp) return;
     if (_spAvailable && emp.spId) {
       try {
-        await SPAPI.deleteItem(emp.spId);
+        try { await GraphAPI.deleteItem(SP_CONFIG.LIST_NAME, emp.spId); }
+        catch (graphErr) {
+          console.warn("Graph employee delete failed; trying SharePoint REST fallback:", graphErr.message);
+          await SPAPI.deleteItem(emp.spId);
+        }
         SPConnection.setStatus("live");
       } catch (err) {
         SPConnection.setStatus("offline");
