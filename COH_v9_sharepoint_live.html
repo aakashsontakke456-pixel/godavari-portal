@@ -2612,7 +2612,7 @@ const Store = (() => {
     return await GraphAPI.columns(SP_CONFIG.WORKLOG_LIST_NAME);
   }
 
-  function _workLogToGraphFields(log, cols) {
+  function _workLogCoreFields(log, cols) {
     const dept = getDepartmentByKey(log.departmentKey);
     const pick = (...names) => FieldNames.pick(cols, ...names);
     const body = {};
@@ -2634,10 +2634,19 @@ const Store = (() => {
     set(pick("departments", "department list"), log.departmentName);
     set(pick("department"), log.departmentName);
     set(pick("total file done", "totalfiledone", "total files", "total"), log.totalFileDone);
-    set(pick("approval status", "approvalstatus", "status"), log.approvalStatus);
-    set(pick("productivity", "productivity pct", "productivitypct"), log.productivityPct);
-    set(pick("working hours", "workinghours", "total working minutes"), log.totalWorkingMinutes);
+    set(pick("manager approval status", "managerapprovalstatus", "approval status", "approvalstatus"), log.approvalStatus);
 
+    console.log("Work log core fields being saved:", Object.keys(body));
+    return body;
+  }
+
+  function _workLogTaskFields(log, cols) {
+    const dept = getDepartmentByKey(log.departmentKey);
+    const pick = (...names) => FieldNames.pick(cols, ...names);
+    const body = {};
+    const set = (internalName, value) => {
+      if (internalName && value !== undefined && value !== null && value !== "") body[internalName] = value;
+    };
     if (dept) {
       dept.fields.forEach(field => {
         const internal = pick(field.column, field.label, field.id);
@@ -2645,8 +2654,18 @@ const Store = (() => {
         set(internal, value);
       });
     }
-    console.log("Work log fields being saved:", Object.keys(body));
+    console.log("Work log task fields being saved:", Object.keys(body));
     return body;
+  }
+
+  async function _patchFieldsIndividually(listName, itemId, fields, label) {
+    for (const [key, value] of Object.entries(fields)) {
+      try {
+        await GraphAPI.updateItem(listName, itemId, { [key]: value });
+      } catch (err) {
+        console.warn(`${label} field skipped: ${key}`, err.message);
+      }
+    }
   }
 
   async function resetToSeed() {
@@ -2775,11 +2794,18 @@ const Store = (() => {
     }
     const existing = getWorkLogById(log.id);
     const cols = await _workLogColumns();
-    const body = _workLogToGraphFields(log, cols);
+    const coreFields = _workLogCoreFields(log, cols);
+    const taskFields = _workLogTaskFields(log, cols);
     if (existing && existing.spId) {
-      await GraphAPI.updateItem(SP_CONFIG.WORKLOG_LIST_NAME, existing.spId, body);
+      await _patchFieldsIndividually(SP_CONFIG.WORKLOG_LIST_NAME, existing.spId, coreFields, "Work log core");
+      await _patchFieldsIndividually(SP_CONFIG.WORKLOG_LIST_NAME, existing.spId, taskFields, "Work log task");
     } else {
-      await GraphAPI.createItem(SP_CONFIG.WORKLOG_LIST_NAME, body);
+      const title = coreFields.Title || `${log.employeeId || "EMP"}-${log.date || Utils.todayISO()}`;
+      const created = await GraphAPI.createItem(SP_CONFIG.WORKLOG_LIST_NAME, { Title: title });
+      const spId = created._graphId || created.ID;
+      delete coreFields.Title;
+      await _patchFieldsIndividually(SP_CONFIG.WORKLOG_LIST_NAME, spId, coreFields, "Work log core");
+      await _patchFieldsIndividually(SP_CONFIG.WORKLOG_LIST_NAME, spId, taskFields, "Work log task");
     }
     await _loadWorkLogsFromGraph();
     SPConnection.setStatus("live");
@@ -2799,11 +2825,15 @@ const Store = (() => {
   async function setApprovalStatus(id, status) {
     const log = getWorkLogById(id);
     if (!log) return null;
-    await saveWorkLog({
-      ...log,
-      approvalStatus: status,
-      approvedAt: new Date().toISOString()
-    });
+    if (!_spAvailable || !log.spId) {
+      throw new Error("SharePoint is not connected. Approval was not saved.");
+    }
+    const cols = await _workLogColumns();
+    const approvalField = FieldNames.pick(cols, "manager approval status", "managerapprovalstatus", "approval status", "approvalstatus");
+    if (!approvalField) throw new Error("Approval status column was not found in SharePoint.");
+    await GraphAPI.updateItem(SP_CONFIG.WORKLOG_LIST_NAME, log.spId, { [approvalField]: status });
+    await _loadWorkLogsFromGraph();
+    SPConnection.setStatus("live");
     return log;
   }
 
