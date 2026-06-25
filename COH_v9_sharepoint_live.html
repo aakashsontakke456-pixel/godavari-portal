@@ -1877,6 +1877,14 @@ const GraphAPI = (() => {
     return await r.json();
   }
 
+  async function _fetchAbsolute(url, options = {}) {
+    const h = await _headers(!!options.body);
+    const r = await fetch(url, { ...options, headers: { ...h, ...(options.headers || {}) } });
+    if (!r.ok) throw new Error(`Graph ${r.status}: ${await r.text()}`);
+    if (r.status === 204) return null;
+    return await r.json();
+  }
+
   async function siteId() {
     if (_siteId) return _siteId;
     const site = await _fetch(`/sites/${SP_CONFIG.TENANT_HOST}:/sites/COHREPORT?$select=id,displayName,webUrl`);
@@ -1911,9 +1919,14 @@ const GraphAPI = (() => {
     const sid = await siteId();
     const list = await listInfo(listName);
     const cols = await columns(listName);
-    const data = await _fetch(`/sites/${sid}/lists/${list.id}/items?$top=${top}&$expand=fields`);
+    let data = await _fetch(`/sites/${sid}/lists/${list.id}/items?$top=${top}&$expand=fields`);
+    const rows = [...(data.value || [])];
+    while (data["@odata.nextLink"]) {
+      data = await _fetchAbsolute(data["@odata.nextLink"]);
+      rows.push(...(data.value || []));
+    }
     return {
-      items: (data.value || []).map(item => ({ ID: item.id, ...item.fields, _graphId: item.id })),
+      items: rows.map(item => ({ ID: item.id, ...item.fields, _graphId: item.id })),
       columns: cols,
       list
     };
@@ -1922,20 +1935,45 @@ const GraphAPI = (() => {
   async function createItem(listName, fields) {
     const sid = await siteId();
     const list = await listInfo(listName);
-    const created = await _fetch(`/sites/${sid}/lists/${list.id}/items`, {
-      method: "POST",
-      body: JSON.stringify({ fields })
-    });
+    let bodyFields = { ...fields };
+    let created;
+    try {
+      created = await _fetch(`/sites/${sid}/lists/${list.id}/items`, {
+        method: "POST",
+        body: JSON.stringify({ fields: bodyFields })
+      });
+    } catch (err) {
+      const readOnly = (err.message.match(/Field '([^']+)' is read-only/i) || [])[1];
+      if (!readOnly || !(readOnly in bodyFields)) throw err;
+      console.warn(`Graph create ignored read-only SharePoint field: ${readOnly}`);
+      delete bodyFields[readOnly];
+      created = await _fetch(`/sites/${sid}/lists/${list.id}/items`, {
+        method: "POST",
+        body: JSON.stringify({ fields: bodyFields })
+      });
+    }
     return { ID: created.id, ...(created.fields || {}), _graphId: created.id };
   }
 
   async function updateItem(listName, itemId, fields) {
     const sid = await siteId();
     const list = await listInfo(listName);
-    await _fetch(`/sites/${sid}/lists/${list.id}/items/${itemId}/fields`, {
-      method: "PATCH",
-      body: JSON.stringify(fields)
-    });
+    let bodyFields = { ...fields };
+    try {
+      await _fetch(`/sites/${sid}/lists/${list.id}/items/${itemId}/fields`, {
+        method: "PATCH",
+        body: JSON.stringify(bodyFields)
+      });
+    } catch (err) {
+      const readOnly = (err.message.match(/Field '([^']+)' is read-only/i) || [])[1];
+      if (!readOnly || !(readOnly in bodyFields)) throw err;
+      console.warn(`Graph update ignored read-only SharePoint field: ${readOnly}`);
+      delete bodyFields[readOnly];
+      await _fetch(`/sites/${sid}/lists/${list.id}/items/${itemId}/fields`, {
+        method: "PATCH",
+        body: JSON.stringify(bodyFields)
+      });
+    }
     return true;
   }
 
@@ -2173,6 +2211,25 @@ function _spItemToEmployee(item, fm) {
     officialMail: "Official_mail", title: "Title"
   };
   const fieldValue = key => f[key] ? item[f[key]] : undefined;
+  const normalizePhotoUrl = value => {
+    if (!value) return null;
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (!trimmed) return null;
+      if (trimmed.startsWith("{")) {
+        try { return normalizePhotoUrl(JSON.parse(trimmed)); } catch (_) {}
+      }
+      return trimmed;
+    }
+    if (typeof value === "object") {
+      if (value.Url) return value.Url;
+      if (value.url) return value.url;
+      if (value.serverUrl && value.serverRelativeUrl) return value.serverUrl + value.serverRelativeUrl;
+      if (value.serverRelativeUrl) return `https://${SP_CONFIG.TENANT_HOST}${value.serverRelativeUrl}`;
+      if (value.fileName && value.serverUrl) return value.serverUrl + "/" + value.fileName;
+    }
+    return null;
+  };
 
   // GU ID: prefer the EMPLOYEE_ID field, fall back to Title field (which holds "GU-xxxx" in some setups)
   const guId = fieldValue("employeeId") || fieldValue("title") || `SP-${item.ID}`;
@@ -2206,7 +2263,7 @@ function _spItemToEmployee(item, fm) {
     targetCount: targetVal ? Number(targetVal) : null,
     targetCountCashVerification: cashVal ? Number(cashVal) : null,
     lastLoginDate: fieldValue("lastLogin") || "",
-    photoUrl:    fieldValue("photoUrl")    || null,
+    photoUrl:    normalizePhotoUrl(fieldValue("photoUrl")),
     officialMail:(fieldValue("officialMail") || "").trim().toLowerCase(),
     photoInitials: _initialsOf(fieldValue("empName") || "")
   };
@@ -2235,7 +2292,6 @@ function _employeeToSpBody(emp, fm) {
   setField("designation", emp.designation);
   setField("role", emp.role);
   setField("isPresent", emp.isPresentToday);
-  setField("attendance", emp.attendanceStatus);
   setField("targetCount", emp.targetCount);
   setField("targetCash", emp.targetCountCashVerification);
   setField("lastLogin", emp.lastLoginDate);
@@ -2548,9 +2604,43 @@ const Store = (() => {
       console.log("Work logs loaded via Microsoft Graph:", logs.length);
       return logs;
     } catch (err) {
-      console.warn("Graph work-log fetch failed; keeping local work-log cache:", err.message);
-      return _readLocal(STORAGE_KEYS.WORKLOGS, []);
+      console.error("Graph work-log fetch failed:", err.message);
+      throw err;
     }
+  }
+
+  async function _workLogColumns() {
+    return await GraphAPI.columns(SP_CONFIG.WORKLOG_LIST_NAME);
+  }
+
+  function _workLogToGraphFields(log, cols) {
+    const dept = getDepartmentByKey(log.departmentKey);
+    const pick = (...names) => FieldNames.pick(cols, ...names);
+    const body = {};
+    const set = (internalName, value) => {
+      if (internalName && value !== undefined && value !== null) body[internalName] = value;
+    };
+
+    set("Title", `${log.employeeId || "EMP"}-${log.date || Utils.todayISO()}`);
+    set(pick("employee name", "employeename", "emp name", "empname"), log.employeeName);
+    set(pick("emp code", "empcode", "employee code", "employeeid", "employee id"), log.employeeId);
+    set(pick("date"), log.date);
+    set(pick("designation"), log.designation);
+    set(pick("departments", "department list"), log.departmentName);
+    set(pick("department"), log.departmentName);
+    set(pick("total file done", "totalfiledone", "total files", "total"), log.totalFileDone);
+    set(pick("approval status", "approvalstatus", "status"), log.approvalStatus);
+    set(pick("productivity", "productivity pct", "productivitypct"), log.productivityPct);
+    set(pick("working hours", "workinghours", "total working minutes"), log.totalWorkingMinutes);
+
+    if (dept) {
+      dept.fields.forEach(field => {
+        const internal = pick(field.column, field.label, field.id);
+        const value = log.fields ? log.fields[field.id] : undefined;
+        set(internal, value);
+      });
+    }
+    return body;
   }
 
   async function resetToSeed() {
@@ -2649,7 +2739,7 @@ const Store = (() => {
     return `GU-${String(max + 1).padStart(4, "0")}`;
   }
 
-  // ---------- Work logs (localStorage) ----------
+  // ---------- Work logs (SharePoint live, localStorage read cache only) ----------
 
   function getWorkLogs() {
     return _readLocal(STORAGE_KEYS.WORKLOGS, []);
@@ -2673,31 +2763,48 @@ const Store = (() => {
     return `LOG-${String(max + 1).padStart(4, "0")}`;
   }
 
-  function saveWorkLog(log) {
-    const all = getWorkLogs();
-    const idx = all.findIndex(l => l.id === log.id);
-    if (idx >= 0) { all[idx] = { ...all[idx], ...log }; }
-    else { all.unshift(log); }
-    _writeLocal(STORAGE_KEYS.WORKLOGS, all);
+  async function saveWorkLog(log) {
+    if (!_spAvailable) {
+      throw new Error("SharePoint is not connected. Work log was not saved.");
+    }
+    const existing = getWorkLogById(log.id);
+    const cols = await _workLogColumns();
+    const body = _workLogToGraphFields(log, cols);
+    if (existing && existing.spId) {
+      await GraphAPI.updateItem(SP_CONFIG.WORKLOG_LIST_NAME, existing.spId, body);
+    } else {
+      await GraphAPI.createItem(SP_CONFIG.WORKLOG_LIST_NAME, body);
+    }
+    await _loadWorkLogsFromGraph();
+    SPConnection.setStatus("live");
     return log;
   }
 
-  function deleteWorkLog(id) {
-    const all = getWorkLogs().filter(l => l.id !== id);
-    _writeLocal(STORAGE_KEYS.WORKLOGS, all);
+  async function deleteWorkLog(id) {
+    if (!_spAvailable) {
+      throw new Error("SharePoint is not connected. Work log was not deleted.");
+    }
+    const log = getWorkLogById(id);
+    if (log && log.spId) await GraphAPI.deleteItem(SP_CONFIG.WORKLOG_LIST_NAME, log.spId);
+    await _loadWorkLogsFromGraph();
+    SPConnection.setStatus("live");
   }
 
-  function setApprovalStatus(id, status) {
+  async function setApprovalStatus(id, status) {
     const log = getWorkLogById(id);
     if (!log) return null;
-    log.approvalStatus = status;
-    log.approvedAt = new Date().toISOString();
-    saveWorkLog(log);
+    await saveWorkLog({
+      ...log,
+      approvalStatus: status,
+      approvedAt: new Date().toISOString()
+    });
     return log;
   }
 
-  function bulkApprove(ids) {
-    ids.forEach(id => setApprovalStatus(id, "Approved"));
+  async function bulkApprove(ids) {
+    for (const id of ids) {
+      await setApprovalStatus(id, "Approved");
+    }
   }
 
   // ---------- Session ----------
@@ -3689,7 +3796,7 @@ const LogWorkView = (() => {
     return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
   }
 
-  function handleSubmit(e, user, isManagerEntry) {
+  async function handleSubmit(e, user, isManagerEntry) {
     e.preventDefault();
 
     if (!currentDeptKey) {
@@ -3731,9 +3838,13 @@ const LogWorkView = (() => {
       createdAt: editingLogId ? Store.getWorkLogById(editingLogId).createdAt : new Date().toISOString()
     };
 
-    Store.saveWorkLog(log);
-    Toast.success(editingLogId ? "Work log updated." : "Work log submitted for approval.");
-    App.navigate(isManagerEntry ? "manager-dashboard" : "dashboard");
+    try {
+      await Store.saveWorkLog(log);
+      Toast.success(editingLogId ? "Work log updated in SharePoint." : "Work log submitted to SharePoint.");
+      App.navigate(isManagerEntry ? "manager-dashboard" : "dashboard");
+    } catch (err) {
+      Toast.error("Save failed: " + err.message);
+    }
   }
 
   return { render };
@@ -3934,7 +4045,7 @@ const HistoryView = (() => {
 const ManagerDashboardView = (() => {
 
   function render(container, user) {
-    const allEmployees = Store.getEmployees().filter(e => e.role === "Employee");
+    const allEmployees = Store.getEmployees();
     // COH managers see all employees across all departments
     const team = allEmployees;
     const allLogs = Store.getWorkLogs();
@@ -4165,8 +4276,8 @@ const EmployeeManagementView = (() => {
   let viewMode = "cards"; // cards | table
 
   function render(container, user) {
-    const all = Store.getEmployees().filter(e => e.role === "Employee");
-    // Both Manager and Chief Manager see all employees (COH is a central hub with only 2 managers)
+    const all = Store.getEmployees();
+    // Managers and Chief Managers see every live row from SharePoint.
     const list = all;
 
     container.innerHTML = `
@@ -4560,12 +4671,17 @@ const ApprovalsView = (() => {
       render(container, user);
     });
 
-    document.getElementById("btn-bulk-approve").addEventListener("click", () => {
+    document.getElementById("btn-bulk-approve").addEventListener("click", async () => {
       if (selectedIds.size === 0) return;
-      Store.bulkApprove([...selectedIds]);
-      Toast.success(`Approved ${selectedIds.size} entr${selectedIds.size === 1 ? "y" : "ies"}.`);
-      selectedIds.clear();
-      App.refresh();
+      const count = selectedIds.size;
+      try {
+        await Store.bulkApprove([...selectedIds]);
+        Toast.success(`Approved ${count} entr${count === 1 ? "y" : "ies"} in SharePoint.`);
+        selectedIds.clear();
+        App.refresh();
+      } catch (err) {
+        Toast.error("Approval failed: " + err.message);
+      }
     });
 
     renderList(pending, container, user);
@@ -4614,17 +4730,25 @@ const ApprovalsView = (() => {
       });
     });
     area.querySelectorAll("[data-approve]").forEach(btn => {
-      btn.addEventListener("click", () => {
-        Store.setApprovalStatus(btn.dataset.approve, "Approved");
-        Toast.success("Entry approved.");
-        App.refresh();
+      btn.addEventListener("click", async () => {
+        try {
+          await Store.setApprovalStatus(btn.dataset.approve, "Approved");
+          Toast.success("Entry approved in SharePoint.");
+          App.refresh();
+        } catch (err) {
+          Toast.error("Approval failed: " + err.message);
+        }
       });
     });
     area.querySelectorAll("[data-reject]").forEach(btn => {
-      btn.addEventListener("click", () => {
-        Store.setApprovalStatus(btn.dataset.reject, "Rejected");
-        Toast.info("Entry rejected.");
-        App.refresh();
+      btn.addEventListener("click", async () => {
+        try {
+          await Store.setApprovalStatus(btn.dataset.reject, "Rejected");
+          Toast.info("Entry rejected in SharePoint.");
+          App.refresh();
+        } catch (err) {
+          Toast.error("Rejection failed: " + err.message);
+        }
       });
     });
     area.querySelectorAll("[data-view]").forEach(btn => {
@@ -4733,7 +4857,7 @@ const ChiefDashboardView = (() => {
 
   /* ---- Main render ---- */
   function render(container, user) {
-    const allEmployees = Store.getEmployees().filter(e => e.role === "Employee");
+    const allEmployees = Store.getEmployees();
     const allLogs = Store.getWorkLogs();
     const depts = Store.getDepartments();
     const deptTargets = Store.getDeptTargets();
@@ -5151,7 +5275,7 @@ const DeptAnalyticsView = (() => {
     if (params && params.deptKey) selectedDeptKey = params.deptKey;
     const depts = Store.getDepartments();
     const allLogs = Store.getWorkLogs();
-    const allEmployees = Store.getEmployees().filter(e => e.role === "Employee");
+    const allEmployees = Store.getEmployees();
     const deptTargets = Store.getDeptTargets();
 
     if (!selectedDeptKey) selectedDeptKey = depts[0].key;
@@ -5455,6 +5579,8 @@ const App = (() => {
     route: "dashboard",
     routeParams: {}
   };
+  let liveSyncTimer = null;
+  let liveSyncInFlight = false;
 
   function navFor(role) {
     if (role === "Manager") return MANAGER_NAV;
@@ -5466,6 +5592,31 @@ const App = (() => {
     if (role === "Chief Manager") return "chief-dashboard";
     if (role === "Manager") return "manager-dashboard";
     return "dashboard";
+  }
+
+  function startLiveSync() {
+    stopLiveSync();
+    liveSyncTimer = setInterval(async () => {
+      if (liveSyncInFlight || !Store.currentUser()) return;
+      if (document.querySelector(".modal-overlay")) return;
+      liveSyncInFlight = true;
+      try {
+        await Store.refreshFromSP();
+        SPConnection.setStatus("live");
+        if (Store.currentUser()) renderShell();
+      } catch (err) {
+        SPConnection.setStatus("offline");
+        console.warn("Live SharePoint refresh failed:", err.message);
+      } finally {
+        liveSyncInFlight = false;
+      }
+    }, 30000);
+  }
+
+  function stopLiveSync() {
+    if (liveSyncTimer) clearInterval(liveSyncTimer);
+    liveSyncTimer = null;
+    liveSyncInFlight = false;
   }
 
   async function boot() {
@@ -5490,6 +5641,7 @@ const App = (() => {
     if (!user) { LoginView.render(); return; }
     state.route = defaultRouteFor(user.role);
     renderShell();
+    startLiveSync();
   }
 
   function navigate(route, params = {}) {
@@ -5553,6 +5705,7 @@ const App = (() => {
         </div>
       </div>
     `;
+    SPConnection.setStatus(SPConnection.getStatus());
 
     document.getElementById("btn-logout").addEventListener("click", handleLogout);
     document.querySelectorAll(".nav-item").forEach(el => {
@@ -5567,7 +5720,7 @@ const App = (() => {
         try {
           await Store.refreshFromSP();
           Toast.success("Refreshed from SharePoint.");
-          renderContent(user);
+          renderShell();
         } catch (e) {
           Toast.error("Could not reach SharePoint.");
         } finally {
@@ -5621,6 +5774,7 @@ const App = (() => {
   }
 
   function handleLogout() {
+    stopLiveSync();
     Store.clearSession();
     Toast.info("Signed out.");
     LoginView.render();
