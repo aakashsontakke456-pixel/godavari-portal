@@ -2210,6 +2210,8 @@ const PhotoCache = (() => {
 
   async function getBlobUrl(photoUrl) {
     if (!photoUrl) return null;
+    // Base64 data URLs (new upload path) render directly — no fetch needed at all.
+    if (/^data:image\//i.test(photoUrl)) return photoUrl;
     if (_cache.has(photoUrl)) return _cache.get(photoUrl);
     try {
       if (/^https:\/\/[^/]*sharepoint\.com\//i.test(photoUrl)) {
@@ -4681,6 +4683,16 @@ const EmployeeManagementView = (() => {
         </div>
         <div class="modal__body">
           <form id="employee-form" autocomplete="off">
+            <div class="field" style="margin-bottom:14px; display:flex; align-items:center; gap:14px;">
+              <img id="ef-photo-preview" src="${ (isEdit && (emp._photoBlobUrl || emp.photoUrl)) ? Utils.escapeHtml(emp._photoBlobUrl || emp.photoUrl) : "" }"
+                   style="width:56px;height:56px;border-radius:50%;object-fit:cover;border:1.5px solid var(--paper-line); ${ (isEdit && (emp._photoBlobUrl || emp.photoUrl)) ? "" : "display:none;" }">
+              <div class="avatar-circle" id="ef-photo-fallback" style="width:56px;height:56px;font-size:17px; ${ (isEdit && (emp._photoBlobUrl || emp.photoUrl)) ? "display:none;" : "" }">${Utils.initialsOf(isEdit ? emp.name : "")}</div>
+              <div>
+                <label class="field__label">Employee photo</label>
+                <input type="file" id="ef-photo-input" accept="image/*" style="display:block; font-size:12px;">
+                <div style="font-size:11px; color:var(--ink-soft); margin-top:2px;">JPG/PNG, auto-resized. <span id="ef-photo-clear" style="${isEdit && emp.photoUrl ? "" : "display:none;"} cursor:pointer; text-decoration:underline;">Remove photo</span></div>
+              </div>
+            </div>
             <div class="field-grid">
               <div class="field">
                 <label class="field__label">Full name<span class="req">*</span></label>
@@ -4780,6 +4792,64 @@ const EmployeeManagementView = (() => {
     });
     renderTargetInputs();
 
+    // ── Photo upload: resize client-side and convert to base64 data URL ──
+    let pendingPhoto = isEdit ? (emp.photoUrl || null) : null;
+    let photoCleared = false;
+    const photoInput = overlay.querySelector("#ef-photo-input");
+    const photoPreview = overlay.querySelector("#ef-photo-preview");
+    const photoFallback = overlay.querySelector("#ef-photo-fallback");
+    const photoClearBtn = overlay.querySelector("#ef-photo-clear");
+
+    function setPhotoPreview(src) {
+      if (src) {
+        photoPreview.src = src;
+        photoPreview.style.display = "";
+        photoFallback.style.display = "none";
+      } else {
+        photoPreview.style.display = "none";
+        photoFallback.style.display = "";
+      }
+    }
+
+    photoInput.addEventListener("change", () => {
+      const file = photoInput.files && photoInput.files[0];
+      if (!file) return;
+      if (!file.type.startsWith("image/")) { Toast.error("Please choose an image file."); return; }
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const img = new Image();
+        img.onload = () => {
+          // Resize so the longest side is ~200px, keeping base64 small enough for a SharePoint text column.
+          const maxSide = 200;
+          let { width, height } = img;
+          if (width > height && width > maxSide) { height = Math.round(height * (maxSide / width)); width = maxSide; }
+          else if (height > maxSide) { width = Math.round(width * (maxSide / height)); height = maxSide; }
+          const canvas = document.createElement("canvas");
+          canvas.width = width; canvas.height = height;
+          canvas.getContext("2d").drawImage(img, 0, 0, width, height);
+          const dataUrl = canvas.toDataURL("image/jpeg", 0.7);
+          pendingPhoto = dataUrl;
+          photoCleared = false;
+          photoClearBtn.style.display = "";
+          setPhotoPreview(dataUrl);
+        };
+        img.src = ev.target.result;
+      };
+      reader.readAsDataURL(file);
+    });
+
+    photoClearBtn.addEventListener("click", () => {
+      pendingPhoto = null;
+      photoCleared = true;
+      photoInput.value = "";
+      photoClearBtn.style.display = "none";
+      setPhotoPreview(null);
+    });
+
+    overlay.querySelector("#ef-name").addEventListener("input", (e) => {
+      if (!pendingPhoto) photoFallback.textContent = Utils.initialsOf(e.target.value);
+    });
+
     overlay.querySelector("#ef-save").addEventListener("click", async () => {
       const name = document.getElementById("ef-name").value.trim();
       const id = document.getElementById("ef-id").value.trim().toUpperCase();
@@ -4819,7 +4889,9 @@ const EmployeeManagementView = (() => {
       };
 
       if (isEdit && emp.spId) record.spId = emp.spId;
-      if (isEdit && emp.photoUrl) record.photoUrl = emp.photoUrl;
+      if (pendingPhoto) record.photoUrl = pendingPhoto;
+      else if (photoCleared) record.photoUrl = "";
+      else if (isEdit && emp.photoUrl) record.photoUrl = emp.photoUrl;
 
       const saveBtn = overlay.querySelector("#ef-save");
       saveBtn.disabled = true;
