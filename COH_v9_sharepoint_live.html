@@ -2179,8 +2179,10 @@ function _spItemToEmployee(item, fm) {
 
   const rawDept = fieldValue("deptList") || "";
   // Support comma-separated departments
-  const depts = rawDept
-    ? rawDept.split(",").map(d => d.trim()).filter(Boolean)
+  const depts = Array.isArray(rawDept)
+    ? rawDept.map(d => String(d).trim()).filter(Boolean)
+    : rawDept
+    ? String(rawDept).split(/[;,]/).map(d => d.trim()).filter(Boolean)
     : [];
 
   const targets = {};
@@ -2220,13 +2222,16 @@ function _employeeToSpBody(emp, fm) {
     lastLogin: "LastLoginDate", photoUrl: "PhotoURL"
   };
   const body = {};
+  const departmentsText = Array.isArray(emp.departments) && emp.departments.length
+    ? emp.departments.join(", ")
+    : emp.department;
   const setField = (key, value) => {
     if (f[key] && value !== undefined) body[f[key]] = value;
   };
   setField("employeeId", emp.id);
   setField("empName", emp.name);
   setField("empPassword", emp.password);
-  setField("deptList", emp.department);
+  setField("deptList", departmentsText);
   setField("designation", emp.designation);
   setField("role", emp.role);
   setField("isPresent", emp.isPresentToday);
@@ -2469,12 +2474,6 @@ const Store = (() => {
       }
       _fieldMap = fieldMap;
       _empCache = items.map(item => _spItemToEmployee(item, _fieldMap));
-      // Merge seed-only entries (Chief Manager etc.) not in SP
-      SEED_EMPLOYEES.forEach(seed => {
-        if (!_empCache.find(e => e.id === seed.id)) {
-          _empCache.push({ ..._migrateEmployees([seed])[0] });
-        }
-      });
       _writeLocal(STORAGE_KEYS.EMPLOYEES_CACHE, _empCache);
       await _loadWorkLogsFromGraph();
       _spAvailable = true;
@@ -2583,6 +2582,9 @@ const Store = (() => {
 
   async function saveEmployee(emp) {
     const existing = _empCache.find(e => e.id === emp.id);
+    if (!_spAvailable) {
+      throw new Error("SharePoint is not connected. Employee changes were not saved. Please refresh and wait until the badge says Live.");
+    }
     if (_spAvailable) {
       try {
         const body = _employeeToSpBody(emp, _fieldMap);
@@ -2606,18 +2608,12 @@ const Store = (() => {
           const newEmp = { ...emp, spId: created.ID };
           _empCache.push(newEmp);
         }
-        _writeLocal(STORAGE_KEYS.EMPLOYEES_CACHE, _empCache);
+        await _loadFromSP();
         SPConnection.setStatus("live");
       } catch (err) {
         SPConnection.setStatus("offline");
         throw err;
       }
-    } else {
-      // Offline fallback: update cache only
-      const idx = _empCache.findIndex(e => e.id === emp.id);
-      if (idx >= 0) { _empCache[idx] = { ..._empCache[idx], ...emp }; }
-      else { _empCache.push(emp); }
-      _writeLocal(STORAGE_KEYS.EMPLOYEES_CACHE, _empCache);
     }
     return emp;
   }
@@ -2625,6 +2621,9 @@ const Store = (() => {
   async function deleteEmployee(id) {
     const emp = _empCache.find(e => e.id === id);
     if (!emp) return;
+    if (!_spAvailable || !emp.spId) {
+      throw new Error("SharePoint is not connected. Employee was not deleted. Please refresh and wait until the badge says Live.");
+    }
     if (_spAvailable && emp.spId) {
       try {
         try { await GraphAPI.deleteItem(SP_CONFIG.LIST_NAME, emp.spId); }
@@ -2638,8 +2637,7 @@ const Store = (() => {
         throw err;
       }
     }
-    _empCache = _empCache.filter(e => e.id !== id);
-    _writeLocal(STORAGE_KEYS.EMPLOYEES_CACHE, _empCache);
+    await _loadFromSP();
   }
 
   function nextEmployeeNumericId() {
