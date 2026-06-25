@@ -2172,21 +2172,24 @@ const PhotoCache = (() => {
   async function getBlobUrl(photoUrl) {
     if (!photoUrl) return null;
     if (_cache.has(photoUrl)) return _cache.get(photoUrl);
-    if (/^https:\/\/[^/]*sharepoint\.com\//i.test(photoUrl)) {
-      _cache.set(photoUrl, photoUrl);
-      return photoUrl;
-    }
     try {
       const token = await MSALAuth.getToken();
-      if (!token) { _cache.set(photoUrl, null); return null; }
+      if (!token) {
+        _cache.set(photoUrl, photoUrl);
+        return photoUrl;
+      }
       const r = await fetch(photoUrl, { headers: { "Authorization": "Bearer " + token } });
-      if (!r.ok) { _cache.set(photoUrl, null); return null; }
+      if (!r.ok) {
+        _cache.set(photoUrl, photoUrl);
+        return photoUrl;
+      }
       const blobUrl = URL.createObjectURL(await r.blob());
       _cache.set(photoUrl, blobUrl);
       return blobUrl;
-    } catch (_) {
-      _cache.set(photoUrl, null);
-      return null;
+    } catch (err) {
+      console.warn("Photo auth fetch failed; using direct SharePoint photo URL:", err.message);
+      _cache.set(photoUrl, photoUrl);
+      return photoUrl;
     }
   }
 
@@ -2345,7 +2348,8 @@ const STORAGE_KEYS = {
   WORKLOGS: "coh_worklogs",
   SESSION: "coh_session",
   SEEDED: "coh_seeded_v2_sp",
-  DEPT_TARGETS: "coh_dept_targets"
+  DEPT_TARGETS: "coh_dept_targets",
+  TASK_TIME_RULES: "coh_task_time_rules"
 };
 
 const Store = (() => {
@@ -2587,7 +2591,7 @@ const Store = (() => {
       });
     }
     const savedWorking = Utils.hmToMinutes(get("totalWorking"));
-    const computedWorking = employee && dept ? Utils.computedWorkingMinutes(dept.key, total, employee) : null;
+    const computedWorking = employee && dept ? Utils.computedWorkingMinutes(dept.key, total, employee, taskFields) : null;
     return {
       id: `SPLOG-${item._graphId || item.ID}`,
       spId: item._graphId || item.ID,
@@ -2900,7 +2904,7 @@ const Store = (() => {
   // ---------- Department targets (Admin-set, org-level) ----------
 
   function getDeptTargets() {
-    return _read(STORAGE_KEYS.DEPT_TARGETS, {});
+    return _readLocal(STORAGE_KEYS.DEPT_TARGETS, {});
   }
 
   function getDeptTarget(deptKey) {
@@ -2911,13 +2915,38 @@ const Store = (() => {
   function saveDeptTarget(deptKey, target) {
     const all = getDeptTargets();
     all[deptKey] = target;
-    _write(STORAGE_KEYS.DEPT_TARGETS, all);
+    _writeLocal(STORAGE_KEYS.DEPT_TARGETS, all);
   }
 
   function deleteDeptTarget(deptKey) {
     const all = getDeptTargets();
     delete all[deptKey];
-    _write(STORAGE_KEYS.DEPT_TARGETS, all);
+    _writeLocal(STORAGE_KEYS.DEPT_TARGETS, all);
+  }
+
+  function getTaskTimeRules() {
+    return _readLocal(STORAGE_KEYS.TASK_TIME_RULES, {});
+  }
+
+  function getTaskTimeRule(deptKey, fieldId) {
+    const all = getTaskTimeRules();
+    return all[deptKey] && all[deptKey][fieldId] !== undefined ? Number(all[deptKey][fieldId]) : null;
+  }
+
+  function saveTaskTimeRule(deptKey, fieldId, minutesPerUnit) {
+    const all = getTaskTimeRules();
+    all[deptKey] = all[deptKey] || {};
+    all[deptKey][fieldId] = minutesPerUnit;
+    _writeLocal(STORAGE_KEYS.TASK_TIME_RULES, all);
+  }
+
+  function deleteTaskTimeRule(deptKey, fieldId) {
+    const all = getTaskTimeRules();
+    if (all[deptKey]) {
+      delete all[deptKey][fieldId];
+      if (!Object.keys(all[deptKey]).length) delete all[deptKey];
+      _writeLocal(STORAGE_KEYS.TASK_TIME_RULES, all);
+    }
   }
 
   return {
@@ -2928,6 +2957,7 @@ const Store = (() => {
     getSession, setSession, clearSession, currentUser,
     getDepartments, getDepartmentByName, getDepartmentByKey, deptColor,
     getDeptTargets, getDeptTarget, saveDeptTarget, deleteDeptTarget,
+    getTaskTimeRules, getTaskTimeRule, saveTaskTimeRule, deleteTaskTimeRule,
     isSpAvailable: () => _spAvailable
   };
 })();
@@ -3019,7 +3049,20 @@ const Utils = (() => {
     return Math.round((totalFileDone / target) * 1000) / 10;
   }
 
-  function computedWorkingMinutes(deptKey, totalFileDone, employee) {
+  function computedWorkingMinutes(deptKey, totalFileDone, employee, fieldsObj = null) {
+    const dept = Store.getDepartmentByKey(deptKey);
+    if (dept && fieldsObj) {
+      let taskMinutes = 0;
+      dept.fields.forEach(field => {
+        if (field.type !== "number") return;
+        const minutesPerUnit = Store.getTaskTimeRule(deptKey, field.id);
+        const value = parseFloat(fieldsObj[field.id]);
+        if (minutesPerUnit !== null && !isNaN(value)) {
+          taskMinutes += value * minutesPerUnit;
+        }
+      });
+      if (taskMinutes > 0) return Math.round(taskMinutes);
+    }
     const target = targetForDepartment(deptKey, employee);
     if (!target || target <= 0 || totalFileDone === null || totalFileDone === undefined) return null;
     return Math.round((Number(totalFileDone) / Number(target)) * 480);
@@ -3845,7 +3888,7 @@ const LogWorkView = (() => {
       sideProdEl.style.color = prodEl.style.color;
     }
 
-    const workingMinutes = Utils.computedWorkingMinutes(currentDeptKey, total, emp);
+    const workingMinutes = Utils.computedWorkingMinutes(currentDeptKey, total, emp, formData);
     const workingInput = document.getElementById("lw-working-hours");
     if (workingInput) workingInput.value = workingMinutes !== null ? Utils.minutesToHM(workingMinutes) : "";
   }
@@ -3885,7 +3928,7 @@ const LogWorkView = (() => {
     const date = document.getElementById("lw-date").value;
     const totalFileDone = Utils.sumCountingFields(currentDeptKey, formData);
     const productivityPct = Utils.computeProductivity(currentDeptKey, totalFileDone, employee);
-    const workingMinutes = Utils.computedWorkingMinutes(currentDeptKey, totalFileDone, employee);
+    const workingMinutes = Utils.computedWorkingMinutes(currentDeptKey, totalFileDone, employee, formData);
 
     const log = {
       id: editingLogId || Store.nextWorkLogId(),
@@ -5509,13 +5552,14 @@ const AdminSettingsView = (() => {
   function render(container, user) {
     const depts = Store.getDepartments();
     const deptTargets = Store.getDeptTargets();
+    const taskRules = Store.getTaskTimeRules();
 
     container.innerHTML = `
       <div class="content__header">
         <div>
           <div class="content__eyebrow">Admin Settings</div>
           <h1>Organisation Configuration</h1>
-          <p class="content__desc">Set monthly department-level targets and manage org-wide settings. These are separate from individual employee targets.</p>
+          <p class="content__desc">Set department targets and task time rules used for productivity and working-hours calculation.</p>
         </div>
       </div>
 
@@ -5541,6 +5585,36 @@ const AdminSettingsView = (() => {
               ${current ? `<div style="font-size:11.5px; color:var(--sage); margin-top:6px; font-weight:600;">Current: ${current} files/month</div>` : `<div style="font-size:11.5px; color:var(--ink-soft); margin-top:6px;">Not set</div>`}
             </div>`;
           }).join("")}
+        </div>
+      </div>
+
+      <div class="card card--pad" style="margin-bottom:22px;">
+        <h2 style="margin-bottom:6px;">Task Time Rules</h2>
+        <p style="font-size:13px; color:var(--ink-soft); margin-bottom:18px;">Set minutes per file or task unit. Working hours are calculated as task count multiplied by these minutes, then shown as HH:MM.</p>
+        <div style="display:flex; flex-direction:column; gap:14px;">
+          ${depts.map(d => `
+            <div class="card card--pad" style="border-left:4px solid ${d.color}; padding:14px 16px;">
+              <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
+                <div style="width:9px; height:9px; border-radius:50%; background:${d.color};"></div>
+                <div style="font-weight:800; font-size:14px;">${Utils.escapeHtml(d.name)}</div>
+              </div>
+              <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:10px;">
+                ${d.fields.filter(f => f.type === "number").map(f => {
+                  const current = taskRules[d.key] && taskRules[d.key][f.id] !== undefined ? taskRules[d.key][f.id] : "";
+                  return `
+                    <div style="display:flex; align-items:center; gap:8px; border:1px solid var(--paper-line); border-radius:6px; padding:8px 10px;">
+                      <label style="flex:1; min-width:0; font-size:12.5px; color:var(--ink-soft); font-weight:650;">${Utils.escapeHtml(f.label)}</label>
+                      <input type="number" min="0" step="0.5" class="task-time-rule-input" data-dept="${d.key}" data-field="${f.id}"
+                        value="${current}" placeholder="min" style="width:78px; padding:7px 8px; font-size:13px;">
+                    </div>`;
+                }).join("")}
+              </div>
+            </div>
+          `).join("")}
+        </div>
+        <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:16px;">
+          <button class="btn btn--ghost" id="btn-clear-task-rules">Clear all task rules</button>
+          <button class="btn btn--primary" id="btn-save-task-rules">Save task rules</button>
         </div>
       </div>
 
@@ -5572,6 +5646,28 @@ const AdminSettingsView = (() => {
         Toast.info("Target cleared.");
         render(container, user);
       });
+    });
+
+    document.getElementById("btn-save-task-rules").addEventListener("click", () => {
+      container.querySelectorAll(".task-time-rule-input").forEach(input => {
+        const raw = input.value.trim();
+        if (!raw) {
+          Store.deleteTaskTimeRule(input.dataset.dept, input.dataset.field);
+          return;
+        }
+        const val = parseFloat(raw);
+        if (!isNaN(val) && val >= 0) Store.saveTaskTimeRule(input.dataset.dept, input.dataset.field, val);
+      });
+      Toast.success("Task time rules saved.");
+      render(container, user);
+    });
+
+    document.getElementById("btn-clear-task-rules").addEventListener("click", () => {
+      container.querySelectorAll(".task-time-rule-input").forEach(input => {
+        Store.deleteTaskTimeRule(input.dataset.dept, input.dataset.field);
+      });
+      Toast.info("Task time rules cleared.");
+      render(container, user);
     });
 
     document.getElementById("btn-export-all").addEventListener("click", () => {
@@ -5630,7 +5726,8 @@ const App = (() => {
     { key: "employees", label: "Employee Management", icon: "&#128101;" },
     { key: "approvals", label: "Approvals", icon: "&#10003;" },
     { key: "log-work", label: "Log Work", icon: "&#9998;" },
-    { key: "history", label: "Work History", icon: "&#128203;" }
+    { key: "history", label: "Work History", icon: "&#128203;" },
+    { key: "admin-settings", label: "Admin Settings", icon: "&#9881;" }
   ];
 
   const CHIEF_NAV = [
