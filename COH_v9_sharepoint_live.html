@@ -1681,12 +1681,12 @@ const FieldNames = (() => {
     const map = buildLookup(cols);
     const direct = names.map(key).map(k => map[k]).find(Boolean);
     if (direct) return direct;
-    const wanted = names.map(key).filter(Boolean);
-    const partial = (cols || []).find(c => {
-      const candidates = [c.Title, c.InternalName, c.displayName, c.name].map(key);
-      return wanted.some(w => candidates.some(v => v && (v.includes(w) || w.includes(v))));
-    });
-    return partial ? (partial.InternalName || partial.name) : null;
+      const wanted = names.map(key).filter(Boolean);
+      const partial = (cols || []).find(c => {
+        const candidates = [c.Title, c.InternalName, c.displayName, c.name].map(key);
+        return wanted.some(w => candidates.some(v => v && v.includes(w)));
+      });
+      return partial ? (partial.InternalName || partial.name) : null;
   }
 
   return { key, buildLookup, pick };
@@ -1936,22 +1936,22 @@ const GraphAPI = (() => {
     const sid = await siteId();
     const list = await listInfo(listName);
     let bodyFields = { ...fields };
-    let created;
-    try {
-      created = await _fetch(`/sites/${sid}/lists/${list.id}/items`, {
-        method: "POST",
-        body: JSON.stringify({ fields: bodyFields })
-      });
-    } catch (err) {
-      const readOnly = (err.message.match(/Field '([^']+)' is read-only/i) || [])[1];
-      if (!readOnly || !(readOnly in bodyFields)) throw err;
-      console.warn(`Graph create ignored read-only SharePoint field: ${readOnly}`);
-      delete bodyFields[readOnly];
-      created = await _fetch(`/sites/${sid}/lists/${list.id}/items`, {
-        method: "POST",
-        body: JSON.stringify({ fields: bodyFields })
-      });
+    let created = null;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      try {
+        created = await _fetch(`/sites/${sid}/lists/${list.id}/items`, {
+          method: "POST",
+          body: JSON.stringify({ fields: bodyFields })
+        });
+        break;
+      } catch (err) {
+        const readOnly = (err.message.match(/Field '([^']+)' is read-only/i) || [])[1];
+        if (!readOnly || !(readOnly in bodyFields)) throw err;
+        console.warn(`Graph create ignored read-only SharePoint field: ${readOnly}`);
+        delete bodyFields[readOnly];
+      }
     }
+    if (!created) throw new Error("Graph create failed after removing read-only fields.");
     return { ID: created.id, ...(created.fields || {}), _graphId: created.id };
   }
 
@@ -1959,22 +1959,21 @@ const GraphAPI = (() => {
     const sid = await siteId();
     const list = await listInfo(listName);
     let bodyFields = { ...fields };
-    try {
-      await _fetch(`/sites/${sid}/lists/${list.id}/items/${itemId}/fields`, {
-        method: "PATCH",
-        body: JSON.stringify(bodyFields)
-      });
-    } catch (err) {
-      const readOnly = (err.message.match(/Field '([^']+)' is read-only/i) || [])[1];
-      if (!readOnly || !(readOnly in bodyFields)) throw err;
-      console.warn(`Graph update ignored read-only SharePoint field: ${readOnly}`);
-      delete bodyFields[readOnly];
-      await _fetch(`/sites/${sid}/lists/${list.id}/items/${itemId}/fields`, {
-        method: "PATCH",
-        body: JSON.stringify(bodyFields)
-      });
+    for (let attempt = 0; attempt < 5; attempt++) {
+      try {
+        await _fetch(`/sites/${sid}/lists/${list.id}/items/${itemId}/fields`, {
+          method: "PATCH",
+          body: JSON.stringify(bodyFields)
+        });
+        return true;
+      } catch (err) {
+        const readOnly = (err.message.match(/Field '([^']+)' is read-only/i) || [])[1];
+        if (!readOnly || !(readOnly in bodyFields)) throw err;
+        console.warn(`Graph update ignored read-only SharePoint field: ${readOnly}`);
+        delete bodyFields[readOnly];
+      }
     }
-    return true;
+    throw new Error("Graph update failed after removing read-only fields.");
   }
 
   async function deleteItem(listName, itemId) {
@@ -2617,8 +2616,14 @@ const Store = (() => {
     const dept = getDepartmentByKey(log.departmentKey);
     const pick = (...names) => FieldNames.pick(cols, ...names);
     const body = {};
+    const blocked = new Set([
+      "LinkTitle", "LinkTitleNoMenu", "LinkFilename", "LinkFilenameNoMenu",
+      "DocIcon", "Edit", "_UIVersionString", "Attachments", "ContentType",
+      "ContentTypeId", "Created", "Modified", "Author", "Editor"
+    ]);
     const set = (internalName, value) => {
-      if (internalName && value !== undefined && value !== null) body[internalName] = value;
+      if (!internalName || blocked.has(internalName)) return;
+      if (value !== undefined && value !== null && value !== "") body[internalName] = value;
     };
 
     set("Title", `${log.employeeId || "EMP"}-${log.date || Utils.todayISO()}`);
@@ -2640,6 +2645,7 @@ const Store = (() => {
         set(internal, value);
       });
     }
+    console.log("Work log fields being saved:", Object.keys(body));
     return body;
   }
 
