@@ -1656,6 +1656,20 @@ const SP_CONFIG = {
   get ITEMS_URL() { return `${this.LIST_API}/items`; }
 };
 
+const ADMIN_AUTH = {
+  id: "ADMIN",
+  password: "admin@123",
+  user: {
+    id: "ADMIN",
+    name: "COH Administrator",
+    role: "Admin",
+    designation: "System Administrator",
+    department: "Administration",
+    departments: ["Administration"],
+    isAdmin: true
+  }
+};
+
 const FieldNames = (() => {
   function key(value) {
     return String(value || "")
@@ -1890,6 +1904,13 @@ const GraphAPI = (() => {
     return await r.json();
   }
 
+  async function _fetchBlob(path, options = {}) {
+    const h = await _headers(false);
+    const r = await fetch(`${ROOT}${path}`, { ...options, headers: { ...h, ...(options.headers || {}) } });
+    if (!r.ok) throw new Error(`Graph ${r.status}: ${await r.text()}`);
+    return await r.blob();
+  }
+
   async function siteId() {
     if (_siteId) return _siteId;
     const site = await _fetch(`/sites/${SP_CONFIG.TENANT_HOST}:/sites/COHREPORT?$select=id,displayName,webUrl`);
@@ -1988,7 +2009,25 @@ const GraphAPI = (() => {
     return true;
   }
 
-  return { items, columns, createItem, updateItem, deleteItem };
+  async function downloadSharePointFile(photoUrl) {
+    const sid = await siteId();
+    const url = new URL(photoUrl);
+    const sitePath = new URL(SP_CONFIG.SITE_URL).pathname.replace(/\/$/, "");
+    let relPath = decodeURIComponent(url.pathname);
+    if (sitePath && relPath.toLowerCase().startsWith(sitePath.toLowerCase())) {
+      relPath = relPath.slice(sitePath.length) || "/";
+    }
+    if (!relPath.startsWith("/")) relPath = "/" + relPath;
+    const graphPath = `/sites/${sid}/drive/root:${encodeURI(relPath)}:/content`;
+    try {
+      return await _fetchBlob(graphPath);
+    } catch (driveErr) {
+      const shareId = "u!" + btoa(photoUrl).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+      return await _fetchBlob(`/shares/${shareId}/driveItem/content`);
+    }
+  }
+
+  return { items, columns, createItem, updateItem, deleteItem, downloadSharePointFile };
 })();
 
 // ── SP REST helper (uses Bearer token from MSAL) ─────────────────────────
@@ -2173,16 +2212,22 @@ const PhotoCache = (() => {
     if (!photoUrl) return null;
     if (_cache.has(photoUrl)) return _cache.get(photoUrl);
     try {
+      if (/^https:\/\/[^/]*sharepoint\.com\//i.test(photoUrl)) {
+        try {
+          const graphBlob = await GraphAPI.downloadSharePointFile(photoUrl);
+          const graphBlobUrl = URL.createObjectURL(graphBlob);
+          _cache.set(photoUrl, graphBlobUrl);
+          return graphBlobUrl;
+        } catch (graphErr) {
+          console.warn("Photo Graph download failed; using direct SharePoint photo URL:", graphErr.message);
+          _cache.set(photoUrl, photoUrl);
+          return photoUrl;
+        }
+      }
       const token = await MSALAuth.getToken();
-      if (!token) {
-        _cache.set(photoUrl, photoUrl);
-        return photoUrl;
-      }
+      if (!token) { _cache.set(photoUrl, photoUrl); return photoUrl; }
       const r = await fetch(photoUrl, { headers: { "Authorization": "Bearer " + token } });
-      if (!r.ok) {
-        _cache.set(photoUrl, photoUrl);
-        return photoUrl;
-      }
+      if (!r.ok) { _cache.set(photoUrl, photoUrl); return photoUrl; }
       const blobUrl = URL.createObjectURL(await r.blob());
       _cache.set(photoUrl, blobUrl);
       return blobUrl;
@@ -2872,6 +2917,10 @@ const Store = (() => {
     _writeLocal(STORAGE_KEYS.SESSION, { employeeId: employee.id, loggedInAt: new Date().toISOString() });
   }
 
+  function setAdminSession() {
+    _writeLocal(STORAGE_KEYS.SESSION, { isAdmin: true, employeeId: ADMIN_AUTH.user.id, loggedInAt: new Date().toISOString() });
+  }
+
   function clearSession() {
     localStorage.removeItem(STORAGE_KEYS.SESSION);
   }
@@ -2879,6 +2928,7 @@ const Store = (() => {
   function currentUser() {
     const session = getSession();
     if (!session) return null;
+    if (session.isAdmin) return { ...ADMIN_AUTH.user };
     return getEmployeeById(session.employeeId);
   }
 
@@ -2954,7 +3004,7 @@ const Store = (() => {
     getEmployees, getEmployeeById, saveEmployee, deleteEmployee, nextEmployeeNumericId,
     getWorkLogs, getWorkLogsByEmployee, getWorkLogById, saveWorkLog, deleteWorkLog,
     nextWorkLogId, setApprovalStatus, bulkApprove,
-    getSession, setSession, clearSession, currentUser,
+    getSession, setSession, setAdminSession, clearSession, currentUser,
     getDepartments, getDepartmentByName, getDepartmentByKey, deptColor,
     getDeptTargets, getDeptTarget, saveDeptTarget, deleteDeptTarget,
     getTaskTimeRules, getTaskTimeRule, saveTaskTimeRule, deleteTaskTimeRule,
@@ -3240,6 +3290,7 @@ const LoginView = (() => {
             <div class="login-screen__hint">
               Search by GU code or name · click to select · then enter password
             </div>
+            <button type="button" class="btn btn--ghost btn--block" id="btn-admin-login" style="margin-top:10px;">Admin login</button>
           </div>
         </div>
 
@@ -3263,6 +3314,65 @@ const LoginView = (() => {
 
     initCombo(employees);
     document.getElementById("login-form").addEventListener("submit", handleSubmit);
+    document.getElementById("btn-admin-login").addEventListener("click", renderAdminLogin);
+  }
+
+  function renderAdminLogin() {
+    document.getElementById("root").innerHTML = `
+      <div class="login-screen">
+        <div class="login-screen__panel">
+          <div class="login-screen__brand">
+            <div class="login-screen__mark">COH</div>
+            <div>
+              <div class="login-screen__title">Admin Console</div>
+              <div class="login-screen__subtitle">Rules and configuration</div>
+            </div>
+          </div>
+
+          <form id="admin-login-form" class="login-form" autocomplete="off">
+            <div class="field">
+              <label class="field__label">Admin ID<span class="req">*</span></label>
+              <input type="text" id="admin-id" placeholder="Enter admin ID" autocomplete="off" required>
+            </div>
+            <div class="field">
+              <label class="field__label">Admin Password<span class="req">*</span></label>
+              <input type="password" id="admin-pass" placeholder="Enter admin password" autocomplete="off" required>
+            </div>
+            <div id="admin-login-error" class="login-form__error" style="display:none;"></div>
+            <button type="submit" class="btn btn--primary btn--block" style="padding:12px;">Open Admin Settings</button>
+            <button type="button" class="btn btn--ghost btn--block" id="btn-back-employee-login" style="margin-top:10px;">Back to employee login</button>
+          </form>
+        </div>
+
+        <div class="login-screen__ledger">
+          <div class="login-screen__ledger-inner">
+            <div class="login-screen__ledger-label">Admin access</div>
+            <div class="login-screen__ledger-date">Configuration only</div>
+            <div class="divider" style="background:rgba(255,255,255,0.18)"></div>
+            <div style="line-height:1.7;color:rgba(255,255,255,.86);font-size:14px;">
+              Admin settings are separate from Manager and Chief Manager accounts.
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    document.getElementById("btn-back-employee-login").addEventListener("click", render);
+    document.getElementById("admin-login-form").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const id = document.getElementById("admin-id").value.trim().toUpperCase();
+      const pass = document.getElementById("admin-pass").value;
+      const errorEl = document.getElementById("admin-login-error");
+      if (id !== ADMIN_AUTH.id || pass !== ADMIN_AUTH.password) {
+        errorEl.textContent = "Incorrect admin ID or password.";
+        errorEl.style.display = "block";
+        return;
+      }
+      errorEl.style.display = "none";
+      Store.setAdminSession();
+      Toast.success("Admin signed in.");
+      App.boot();
+    });
   }
 
   function initCombo(employees) {
@@ -5726,15 +5836,17 @@ const App = (() => {
     { key: "employees", label: "Employee Management", icon: "&#128101;" },
     { key: "approvals", label: "Approvals", icon: "&#10003;" },
     { key: "log-work", label: "Log Work", icon: "&#9998;" },
-    { key: "history", label: "Work History", icon: "&#128203;" },
-    { key: "admin-settings", label: "Admin Settings", icon: "&#9881;" }
+    { key: "history", label: "Work History", icon: "&#128203;" }
   ];
 
   const CHIEF_NAV = [
     { key: "chief-dashboard", label: "Org Overview", icon: "&#9737;" },
     { key: "dept-analytics", label: "Dept Analytics", icon: "&#128202;" },
     { key: "employees", label: "Employee Management", icon: "&#128101;" },
-    { key: "history", label: "All Work History", icon: "&#128203;" },
+    { key: "history", label: "All Work History", icon: "&#128203;" }
+  ];
+
+  const ADMIN_NAV = [
     { key: "admin-settings", label: "Admin Settings", icon: "&#9881;" }
   ];
 
@@ -5746,12 +5858,14 @@ const App = (() => {
   let liveSyncInFlight = false;
 
   function navFor(role) {
+    if (role === "Admin") return ADMIN_NAV;
     if (role === "Manager") return MANAGER_NAV;
     if (role === "Chief Manager") return CHIEF_NAV;
     return EMPLOYEE_NAV;
   }
 
   function defaultRouteFor(role) {
+    if (role === "Admin") return "admin-settings";
     if (role === "Chief Manager") return "chief-dashboard";
     if (role === "Manager") return "manager-dashboard";
     return "dashboard";
@@ -5923,7 +6037,11 @@ const App = (() => {
         DeptAnalyticsView.render(container, user, state.routeParams);
         break;
       case "admin-settings":
-        AdminSettingsView.render(container, user);
+        if (user.role === "Admin") {
+          AdminSettingsView.render(container, user);
+        } else {
+          container.innerHTML = `<div class="empty-state"><div class="empty-state__icon">&#9881;</div><h3>Admin access required</h3><p>Please sign out and use the separate Admin login.</p></div>`;
+        }
         break;
       case "employees":
         EmployeeManagementView.render(container, user);
