@@ -2561,7 +2561,9 @@ const Store = (() => {
       department:   FieldNames.pickExact(cols, "department"),
       total:        FieldNames.pickExact(cols, "total file done"),
       taskType:     FieldNames.pickExact(cols, "task type"),
-      approval:     FieldNames.pickExact(cols, "manager approval status")
+      approval:     FieldNames.pickExact(cols, "manager approval status"),
+      totalProductivity: FieldNames.pickExact(cols, "total productivity"),
+      totalWorking: FieldNames.pickExact(cols, "total working hour", "total working hours")
     };
     const get = key => f[key] ? item[f[key]] : undefined;
     const deptName = (get("department") || get("departments") || "").toString().trim();
@@ -2576,12 +2578,16 @@ const Store = (() => {
     const employeeId = String(get("employeeId") || "").trim();
     const employee = employeeId ? _empCache.find(e => FieldNames.key(e.id) === FieldNames.key(employeeId)) : null;
     const taskFields = {};
-    (cols || []).forEach(c => {
-      const name = c.name || c.InternalName;
-      const display = c.displayName || c.Title || name;
-      const value = item[name];
-      if (typeof value === "number" && name !== f.total) taskFields[display] = value;
-    });
+    if (dept) {
+      dept.fields.forEach(field => {
+        const internal = FieldNames.pickExact(cols, field.column, field.label, field.id)
+          || FieldNames.pick(cols, field.column, field.label, field.id);
+        const value = internal ? item[internal] : undefined;
+        if (value !== undefined && value !== null && value !== "") taskFields[field.id] = value;
+      });
+    }
+    const savedWorking = Utils.hmToMinutes(get("totalWorking"));
+    const computedWorking = employee && dept ? Utils.computedWorkingMinutes(dept.key, total, employee) : null;
     return {
       id: `SPLOG-${item._graphId || item.ID}`,
       spId: item._graphId || item.ID,
@@ -2593,8 +2599,10 @@ const Store = (() => {
       designation: String(get("designation") || (employee ? employee.designation : "") || "").trim(),
       totalFileDone: total,
       fields: taskFields,
-      totalWorkingMinutes: null,
-      productivityPct: employee && dept ? Utils.computeProductivity(dept.key, total, employee) : null,
+      totalWorkingMinutes: savedWorking !== null ? savedWorking : computedWorking,
+      productivityPct: get("totalProductivity") !== undefined && get("totalProductivity") !== ""
+        ? parseFloat(get("totalProductivity"))
+        : (employee && dept ? Utils.computeProductivity(dept.key, total, employee) : null),
       approvalStatus: String(get("approval") || "Approved"),
       createdAt: date
     };
@@ -2639,6 +2647,8 @@ const Store = (() => {
     set(pick("department"), log.departmentName);
     set(pick("total file done"), log.totalFileDone);
     set(pick("manager approval status"), log.approvalStatus);
+    set(pick("total productivity"), log.productivityPct);
+    set(pick("total working hour", "total working hours"), log.totalWorkingMinutes === null || log.totalWorkingMinutes === undefined ? null : Utils.minutesToHM(log.totalWorkingMinutes));
 
     console.log("Work log core fields being saved:", Object.keys(body));
     return body;
@@ -2653,7 +2663,8 @@ const Store = (() => {
     };
     if (dept) {
       dept.fields.forEach(field => {
-        const internal = pick(field.column, field.label, field.id);
+        const internal = pick(field.column, field.label, field.id)
+          || FieldNames.pick(cols, field.column, field.label, field.id);
         const value = log.fields ? log.fields[field.id] : undefined;
         set(internal, value);
       });
@@ -2983,15 +2994,13 @@ const Utils = (() => {
   }
 
   /** Compute productivity % for a log, honoring the per-department rule. */
-  function computeProductivity(deptKey, totalFileDone, employee) {
-    if (!employee || totalFileDone === null || totalFileDone === undefined) return null;
-    // Try new departmentTargets map first
+  function targetForDepartment(deptKey, employee) {
+    if (!employee) return null;
     const dept = Store.getDepartmentByKey(deptKey);
     let target = null;
     if (dept && employee.departmentTargets) {
       target = employee.departmentTargets[dept.name] || null;
     }
-    // Fall back to legacy fields
     if (!target) {
       if (deptKey === "cash-verification") {
         target = employee.targetCountCashVerification || employee.targetCount;
@@ -2999,8 +3008,21 @@ const Utils = (() => {
         target = employee.targetCount;
       }
     }
+    return target || null;
+  }
+
+  /** Compute productivity % for a log, honoring the per-department rule. */
+  function computeProductivity(deptKey, totalFileDone, employee) {
+    if (!employee || totalFileDone === null || totalFileDone === undefined) return null;
+    const target = targetForDepartment(deptKey, employee);
     if (!target || target <= 0) return null;
     return Math.round((totalFileDone / target) * 1000) / 10;
+  }
+
+  function computedWorkingMinutes(deptKey, totalFileDone, employee) {
+    const target = targetForDepartment(deptKey, employee);
+    if (!target || target <= 0 || totalFileDone === null || totalFileDone === undefined) return null;
+    return Math.round((Number(totalFileDone) / Number(target)) * 480);
   }
 
   function productivityTone(pct) {
@@ -3026,6 +3048,16 @@ const Utils = (() => {
     return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
   }
 
+  function hmToMinutes(val) {
+    if (val === null || val === undefined || val === "") return null;
+    if (typeof val === "number" && !isNaN(val)) return Math.round(val);
+    const text = String(val).trim();
+    const hm = text.match(/^(\d{1,3}):(\d{2})$/);
+    if (hm) return parseInt(hm[1], 10) * 60 + parseInt(hm[2], 10);
+    const numeric = parseFloat(text);
+    return isNaN(numeric) ? null : Math.round(numeric);
+  }
+
   function uniq(arr) {
     return [...new Set(arr)];
   }
@@ -3045,8 +3077,8 @@ const Utils = (() => {
 
   return {
     todayISO, formatDateLong, formatDateShort, monthKey, monthLabel, nowTime,
-    initialsOf, sumCountingFields, computeProductivity, productivityTone,
-    escapeHtml, minutesToHM, uniq, downloadCSV
+    initialsOf, sumCountingFields, targetForDepartment, computeProductivity, computedWorkingMinutes, productivityTone,
+    escapeHtml, minutesToHM, hmToMinutes, uniq, downloadCSV
   };
 })();
 
@@ -3567,9 +3599,9 @@ const LogWorkView = (() => {
           <div style="display:flex; align-items:center; justify-content:space-between; gap:18px; flex-wrap:wrap;">
             <div>
               <div class="field__label" style="margin-bottom:8px;">Total Working Hours (HH:MM)</div>
-              <input type="text" id="lw-working-hours" placeholder="e.g. 03:30" style="max-width:180px; font-size:18px; font-family:var(--font-mono); font-weight:700; text-align:center;" value="${editingLog && editingLog.totalWorkingMinutes ? Utils.minutesToHM(editingLog.totalWorkingMinutes) : ''}">
+              <input type="text" id="lw-working-hours" readonly placeholder="Auto" style="max-width:180px; font-size:18px; font-family:var(--font-mono); font-weight:700; text-align:center;" value="${editingLog && editingLog.totalWorkingMinutes ? Utils.minutesToHM(editingLog.totalWorkingMinutes) : ''}">
             </div>
-            <div style="font-size:12.5px; color:var(--ink-soft); max-width:320px;">Enter the total time you worked today, in hours and minutes — this is logged alongside your task counts below.</div>
+            <div style="font-size:12.5px; color:var(--ink-soft); max-width:320px;">Auto-calculated from files done against the department target and saved to SharePoint.</div>
           </div>
         </div>
       ` : ""}
@@ -3627,7 +3659,7 @@ const LogWorkView = (() => {
               <div class="field-grid" style="margin-bottom:18px;">
                 <div class="field">
                   <label class="field__label">Total Working Hours (HH:MM)</label>
-                  <input type="text" id="lw-working-hours" placeholder="e.g. 03:30" value="${editingLog && editingLog.totalWorkingMinutes ? Utils.minutesToHM(editingLog.totalWorkingMinutes) : ''}">
+                  <input type="text" id="lw-working-hours" readonly placeholder="Auto" value="${editingLog && editingLog.totalWorkingMinutes ? Utils.minutesToHM(editingLog.totalWorkingMinutes) : ''}">
                 </div>
               </div>
             ` : ""}
@@ -3795,18 +3827,7 @@ const LogWorkView = (() => {
     const total = currentDeptKey ? Utils.sumCountingFields(currentDeptKey, formData) : 0;
     document.getElementById("lw-total-files").textContent = total;
 
-    let target = null;
-    if (emp) {
-      const deptObj = currentDeptKey ? Store.getDepartmentByKey(currentDeptKey) : null;
-      if (deptObj && emp.departmentTargets) {
-        target = emp.departmentTargets[deptObj.name] || null;
-      }
-      if (!target) {
-        target = currentDeptKey === "cash-verification"
-          ? (emp.targetCountCashVerification || emp.targetCount)
-          : emp.targetCount;
-      }
-    }
+    const target = Utils.targetForDepartment(currentDeptKey, emp);
     document.getElementById("lw-target").textContent = target ?? "Not set";
 
     const productivity = (emp && target) ? Utils.computeProductivity(currentDeptKey, total, emp) : null;
@@ -3823,6 +3844,10 @@ const LogWorkView = (() => {
       sideProdEl.textContent = productivity !== null ? productivity + "%" : "—";
       sideProdEl.style.color = prodEl.style.color;
     }
+
+    const workingMinutes = Utils.computedWorkingMinutes(currentDeptKey, total, emp);
+    const workingInput = document.getElementById("lw-working-hours");
+    if (workingInput) workingInput.value = workingMinutes !== null ? Utils.minutesToHM(workingMinutes) : "";
   }
 
   function recalc(user) {
@@ -3860,7 +3885,7 @@ const LogWorkView = (() => {
     const date = document.getElementById("lw-date").value;
     const totalFileDone = Utils.sumCountingFields(currentDeptKey, formData);
     const productivityPct = Utils.computeProductivity(currentDeptKey, totalFileDone, employee);
-    const workingMinutes = parseHMtoMinutes(document.getElementById("lw-working-hours").value);
+    const workingMinutes = Utils.computedWorkingMinutes(currentDeptKey, totalFileDone, employee);
 
     const log = {
       id: editingLogId || Store.nextWorkLogId(),
@@ -4811,6 +4836,7 @@ const ApprovalsView = (() => {
           <div class="kv-row"><span class="kv-row__label">Employee</span><span class="kv-row__value">${Utils.escapeHtml(log.employeeName)}</span></div>
           <div class="kv-row"><span class="kv-row__label">Total File Done</span><span class="kv-row__value">${log.totalFileDone ?? "—"}</span></div>
           <div class="kv-row"><span class="kv-row__label">Productivity</span><span class="kv-row__value">${log.productivityPct !== null ? log.productivityPct + "%" : "—"}</span></div>
+          <div class="kv-row"><span class="kv-row__label">Working hours</span><span class="kv-row__value">${Utils.minutesToHM(log.totalWorkingMinutes)}</span></div>
           <div class="divider"></div>
           <h3 style="margin-bottom:10px;">Task breakdown</h3>
           ${dept ? dept.fields.map(f => `
