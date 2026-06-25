@@ -2110,7 +2110,8 @@ const SPAPI = (() => {
         targetCount: pick("targetcount", "target_count", "target count") || "Target_count",
         targetCash:  pick("targetcountcashverification", "target_count_cashverification", "targetcountcas", "target_count_cas", "target count cas"),
         lastLogin:   pick("lastlogindate", "lastlogin", "last login date") || "LastLoginDate",
-        photoUrl:    pick("photourl", "employeephoto", "employee photo", "photo") || "PhotoURL",
+        photoUrl:    pick("photourl") || "PhotoURL",
+        photoUrlAlt: pick("employeephoto", "employee photo", "photo"),
         officialMail:pick("officialmail", "official_mail", "official email") || "Official_mail",
         title:       "Title"
       };
@@ -2123,7 +2124,7 @@ const SPAPI = (() => {
         deptList: "Department_List", designation: "EMP_DESIGNATI", role: "Role",
         isPresent: "IsPresentToday", attendance: "AttendanceDis0",
         targetCount: "Target_count", targetCash: "Target_count_cas",
-        lastLogin: "LastLoginDate", photoUrl: "PhotoURL",
+        lastLogin: "LastLoginDate", photoUrl: "PhotoURL", photoUrlAlt: null,
         officialMail: "Official_mail", title: "Title"
       };
       return _fieldMap;
@@ -2135,7 +2136,7 @@ const SPAPI = (() => {
     let selectFields = [
       "ID", fm.title, fm.employeeId, fm.empName, fm.empPassword,
       fm.deptList, fm.designation, fm.role, fm.isPresent, fm.attendance,
-      fm.targetCount, fm.targetCash, fm.lastLogin, fm.photoUrl, fm.officialMail
+      fm.targetCount, fm.targetCash, fm.lastLogin, fm.photoUrl, fm.photoUrlAlt, fm.officialMail
     ].filter((v, i, a) => v && a.indexOf(v) === i); // deduplicate
 
     const headers = await _headers();
@@ -2221,9 +2222,11 @@ const PhotoCache = (() => {
           _cache.set(photoUrl, graphBlobUrl);
           return graphBlobUrl;
         } catch (graphErr) {
-          console.warn("Photo Graph download failed; using direct SharePoint photo URL:", graphErr.message);
-          _cache.set(photoUrl, photoUrl);
-          return photoUrl;
+          // Old SharePoint "sharing link" URLs can't be resolved by Graph (no permission /
+          // link expired) and also can't render as a plain <img src>. Don't return the dead
+          // URL — return null so the UI falls back to initials immediately, no console spam.
+          _cache.set(photoUrl, null);
+          return null;
         }
       }
       const token = await MSALAuth.getToken();
@@ -2245,6 +2248,7 @@ const PhotoCache = (() => {
       employees.filter(e => e.photoUrl).map(async e => {
         const b = await getBlobUrl(e.photoUrl);
         if (b) e._photoBlobUrl = b;
+        else e._photoBlobUrl = null; // explicit: dead link, don't let render fall back to raw photoUrl
       })
     );
   }
@@ -2317,7 +2321,7 @@ function _spItemToEmployee(item, fm) {
     targetCount: targetVal ? Number(targetVal) : null,
     targetCountCashVerification: cashVal ? Number(cashVal) : null,
     lastLoginDate: fieldValue("lastLogin") || "",
-    photoUrl:    normalizePhotoUrl(fieldValue("photoUrl")),
+    photoUrl:    normalizePhotoUrl(fieldValue("photoUrlAlt")) || normalizePhotoUrl(fieldValue("photoUrl")),
     officialMail:(fieldValue("officialMail") || "").trim().toLowerCase(),
     photoInitials: _initialsOf(fieldValue("empName") || "")
   };
@@ -2374,7 +2378,8 @@ function _employeeFieldMapFromColumns(cols) {
     targetCount: FieldNames.pick(cols, "targetcount", "target_count", "target count") || "Target_count",
     targetCash:  FieldNames.pick(cols, "targetcountcashverification", "target_count_cashverification", "targetcountcas", "target_count_cas", "target count cas"),
     lastLogin:   FieldNames.pick(cols, "lastlogindate", "lastlogin", "last login date") || "LastLoginDate",
-    photoUrl:    FieldNames.pick(cols, "photourl", "employeephoto", "employee photo", "photo") || "PhotoURL",
+    photoUrl:    FieldNames.pick(cols, "photourl") || "PhotoURL",
+    photoUrlAlt: FieldNames.pick(cols, "employeephoto", "employee photo", "photo"),
     officialMail:FieldNames.pick(cols, "officialmail", "official_mail", "official email") || "Official_mail",
     title:       "Title"
   };
@@ -4545,7 +4550,7 @@ const EmployeeManagementView = (() => {
                   return `
                   <tr>
                     <td>
-                      ${ (() => { const _src = e._photoBlobUrl || e.photoUrl; return _src
+                      ${ (() => { const _src = e._photoBlobUrl !== undefined ? e._photoBlobUrl : e.photoUrl; return _src
                         ? `<img src="${Utils.escapeHtml(_src)}" alt="${Utils.escapeHtml(e.name)}"
                              style="width:34px;height:34px;border-radius:50%;object-fit:cover;vertical-align:middle;border:1.5px solid var(--paper-line);"
                              onerror="this.style.display='none';this.nextElementSibling.style.display='inline-flex';">
@@ -4584,7 +4589,7 @@ const EmployeeManagementView = (() => {
             return `
             <div class="card card--pad" style="border-left:4px solid ${primaryDept ? primaryDept.color : '#ccc'};">
               <div style="display:flex; align-items:center; gap:12px; margin-bottom:14px;">
-                ${ (() => { const _src = e._photoBlobUrl || e.photoUrl; return _src
+                ${ (() => { const _src = e._photoBlobUrl !== undefined ? e._photoBlobUrl : e.photoUrl; return _src
                   ? `<img src="${Utils.escapeHtml(_src)}" alt="${Utils.escapeHtml(e.name)}"
                        style="width:46px;height:46px;border-radius:50%;object-fit:cover;border:2px solid ${primaryDept ? primaryDept.color : '#ccc'};"
                        onerror="this.style.display='none';this.nextElementSibling.style.display='flex';">
