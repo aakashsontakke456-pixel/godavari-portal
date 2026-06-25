@@ -2257,6 +2257,7 @@ const PhotoCache = (() => {
 })();
 
 // Map SharePoint item → app employee object (uses dynamically discovered field names)
+let _photoDebugLogged = false;
 function _spItemToEmployee(item, fm) {
   // fm = fieldMap from SPAPI.discoverFields()
   // Fallback to common names if fm not provided
@@ -2305,6 +2306,11 @@ function _spItemToEmployee(item, fm) {
   const cashVal   = fieldValue("targetCash");
   if (targetVal && depts[0]) targets[depts[0]] = Number(targetVal);
   if (cashVal) targets["Cash Verification"] = Number(cashVal);
+
+  if (!_photoDebugLogged && item.ID) {
+    console.log("PHOTO DEBUG — raw photoUrlAlt:", JSON.stringify(fieldValue("photoUrlAlt")), " raw photoUrl:", JSON.stringify(fieldValue("photoUrl")));
+    _photoDebugLogged = true;
+  }
 
   return {
     spId:       item.ID,
