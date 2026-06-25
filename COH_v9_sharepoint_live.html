@@ -1677,6 +1677,11 @@ const FieldNames = (() => {
     return map;
   }
 
+  function pickExact(cols, ...names) {
+    const map = buildLookup(cols);
+    return names.map(key).map(k => map[k]).find(Boolean) || null;
+  }
+
   function pick(cols, ...names) {
     const map = buildLookup(cols);
     const direct = names.map(key).map(k => map[k]).find(Boolean);
@@ -1689,7 +1694,7 @@ const FieldNames = (() => {
       return partial ? (partial.InternalName || partial.name) : null;
   }
 
-  return { key, buildLookup, pick };
+  return { key, buildLookup, pickExact, pick };
 })();
 
 // SharePoint internal field names (verified from list column names in SP UI)
@@ -2548,15 +2553,15 @@ const Store = (() => {
 
   function _workLogFromGraphItem(item, cols) {
     const f = {
-      employeeName: FieldNames.pick(cols, "employee name", "employeename", "emp name", "empname"),
-      employeeId:   FieldNames.pick(cols, "emp code", "empcode", "employee code", "employeeid", "employee id"),
-      date:         FieldNames.pick(cols, "date"),
-      designation:  FieldNames.pick(cols, "designation"),
-      departments:  FieldNames.pick(cols, "departments", "department list"),
-      department:   FieldNames.pick(cols, "department"),
-      total:        FieldNames.pick(cols, "total file done", "totalfiledone", "total files", "total"),
-      taskType:     FieldNames.pick(cols, "task type", "tasktype"),
-      approval:     FieldNames.pick(cols, "approval status", "approvalstatus", "status")
+      employeeName: FieldNames.pickExact(cols, "employee name", "title") || "Title",
+      employeeId:   FieldNames.pickExact(cols, "emp code", "empcode"),
+      date:         FieldNames.pickExact(cols, "date"),
+      designation:  FieldNames.pickExact(cols, "designation"),
+      departments:  FieldNames.pickExact(cols, "departments"),
+      department:   FieldNames.pickExact(cols, "department"),
+      total:        FieldNames.pickExact(cols, "total file done"),
+      taskType:     FieldNames.pickExact(cols, "task type"),
+      approval:     FieldNames.pickExact(cols, "manager approval status")
     };
     const get = key => f[key] ? item[f[key]] : undefined;
     const deptName = (get("department") || get("departments") || "").toString().trim();
@@ -2614,7 +2619,7 @@ const Store = (() => {
 
   function _workLogCoreFields(log, cols) {
     const dept = getDepartmentByKey(log.departmentKey);
-    const pick = (...names) => FieldNames.pick(cols, ...names);
+    const pick = (...names) => FieldNames.pickExact(cols, ...names);
     const body = {};
     const blocked = new Set([
       "LinkTitle", "LinkTitleNoMenu", "LinkFilename", "LinkFilenameNoMenu",
@@ -2626,15 +2631,14 @@ const Store = (() => {
       if (value !== undefined && value !== null && value !== "") body[internalName] = value;
     };
 
-    set("Title", `${log.employeeId || "EMP"}-${log.date || Utils.todayISO()}`);
-    set(pick("employee name", "employeename", "emp name", "empname"), log.employeeName);
-    set(pick("emp code", "empcode", "employee code", "employeeid", "employee id"), log.employeeId);
+    set("Title", log.employeeName);
+    set(pick("emp code", "empcode"), log.employeeId);
     set(pick("date"), log.date);
     set(pick("designation"), log.designation);
-    set(pick("departments", "department list"), log.departmentName);
+    set(pick("departments"), log.departmentName);
     set(pick("department"), log.departmentName);
-    set(pick("total file done", "totalfiledone", "total files", "total"), log.totalFileDone);
-    set(pick("manager approval status", "managerapprovalstatus", "approval status", "approvalstatus"), log.approvalStatus);
+    set(pick("total file done"), log.totalFileDone);
+    set(pick("manager approval status"), log.approvalStatus);
 
     console.log("Work log core fields being saved:", Object.keys(body));
     return body;
@@ -2642,7 +2646,7 @@ const Store = (() => {
 
   function _workLogTaskFields(log, cols) {
     const dept = getDepartmentByKey(log.departmentKey);
-    const pick = (...names) => FieldNames.pick(cols, ...names);
+    const pick = (...names) => FieldNames.pickExact(cols, ...names);
     const body = {};
     const set = (internalName, value) => {
       if (internalName && value !== undefined && value !== null && value !== "") body[internalName] = value;
@@ -2829,7 +2833,7 @@ const Store = (() => {
       throw new Error("SharePoint is not connected. Approval was not saved.");
     }
     const cols = await _workLogColumns();
-    const approvalField = FieldNames.pick(cols, "manager approval status", "managerapprovalstatus", "approval status", "approvalstatus");
+    const approvalField = FieldNames.pickExact(cols, "manager approval status");
     if (!approvalField) throw new Error("Approval status column was not found in SharePoint.");
     await GraphAPI.updateItem(SP_CONFIG.WORKLOG_LIST_NAME, log.spId, { [approvalField]: status });
     await _loadWorkLogsFromGraph();
