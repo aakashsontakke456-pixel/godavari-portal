@@ -599,7 +599,7 @@ tbody tr:hover { background: #FBFAF7; }
   width: 34px; height: 34px; border-radius: 50%; flex-shrink: 0;
   background: var(--brand-tint); color: var(--brand-deep);
   display: flex; align-items: center; justify-content: center;
-  font-size: 12px; font-weight: 700;
+  font-size: 12px; font-weight: 700; overflow: hidden;
 }
 .emp-combo__avatar--lg { width: 42px; height: 42px; font-size: 14px; }
 .emp-combo__info { flex: 1; min-width: 0; }
@@ -1656,19 +1656,10 @@ const SP_CONFIG = {
   get ITEMS_URL() { return `${this.LIST_API}/items`; }
 };
 
-const ADMIN_AUTH = {
-  id: "ADMIN",
-  password: "admin@123",
-  user: {
-    id: "ADMIN",
-    name: "COH Administrator",
-    role: "Admin",
-    designation: "System Administrator",
-    department: "Administration",
-    departments: ["Administration"],
-    isAdmin: true
-  }
-};
+// Admin access is granted via SharePoint: any EMPLOGINDATA row with
+// Role = "Admin" can sign in (through either the employee login form or the
+// "Admin login" shortcut) using its own EMPLOYEE_ID / EMP_PASSWORD, exactly
+// like every other employee. There is no separate hardcoded admin account.
 
 const FieldNames = (() => {
   function key(value) {
@@ -2910,10 +2901,6 @@ const Store = (() => {
     _writeLocal(STORAGE_KEYS.SESSION, { employeeId: employee.id, loggedInAt: new Date().toISOString() });
   }
 
-  function setAdminSession() {
-    _writeLocal(STORAGE_KEYS.SESSION, { isAdmin: true, employeeId: ADMIN_AUTH.user.id, loggedInAt: new Date().toISOString() });
-  }
-
   function clearSession() {
     localStorage.removeItem(STORAGE_KEYS.SESSION);
   }
@@ -2921,7 +2908,6 @@ const Store = (() => {
   function currentUser() {
     const session = getSession();
     if (!session) return null;
-    if (session.isAdmin) return { ...ADMIN_AUTH.user };
     return getEmployeeById(session.employeeId);
   }
 
@@ -2997,7 +2983,7 @@ const Store = (() => {
     getEmployees, getEmployeeById, saveEmployee, deleteEmployee, nextEmployeeNumericId,
     getWorkLogs, getWorkLogsByEmployee, getWorkLogById, saveWorkLog, deleteWorkLog,
     nextWorkLogId, setApprovalStatus, bulkApprove,
-    getSession, setSession, setAdminSession, clearSession, currentUser,
+    getSession, setSession, clearSession, currentUser,
     getDepartments, getDepartmentByName, getDepartmentByKey, deptColor,
     getDeptTargets, getDeptTarget, saveDeptTarget, deleteDeptTarget,
     getTaskTimeRules, getTaskTimeRule, saveTaskTimeRule, deleteTaskTimeRule,
@@ -3356,13 +3342,22 @@ const LoginView = (() => {
       const id = document.getElementById("admin-id").value.trim().toUpperCase();
       const pass = document.getElementById("admin-pass").value;
       const errorEl = document.getElementById("admin-login-error");
-      if (id !== ADMIN_AUTH.id || pass !== ADMIN_AUTH.password) {
+
+      // Admin credentials now live in SharePoint (EMPLOGINDATA), same as every
+      // other employee — there is no hardcoded admin password. To grant admin
+      // access, add/edit a row in EMPLOGINDATA with Role = "Admin" and set its
+      // EMPLOYEE_ID and EMP_PASSWORD as you would for any employee.
+      const admin = Store.getEmployees().find(emp =>
+        emp.id.toUpperCase() === id && emp.role === "Admin"
+      );
+
+      if (!admin || admin.password !== pass) {
         errorEl.textContent = "Incorrect admin ID or password.";
         errorEl.style.display = "block";
         return;
       }
       errorEl.style.display = "none";
-      Store.setAdminSession();
+      Store.setSession(admin);
       Toast.success("Admin signed in.");
       App.boot();
     });
@@ -3379,12 +3374,12 @@ const LoginView = (() => {
 
     function getFiltered(query) {
       const q = query.trim().toLowerCase();
-      if (!q) return employees.slice(0, 12);
+      if (!q) return employees;
       return employees.filter(e =>
         e.id.toLowerCase().includes(q) ||
         e.name.toLowerCase().includes(q) ||
         (e.designation || "").toLowerCase().includes(q)
-      ).slice(0, 10);
+      );
     }
 
     function renderDropdown(query) {
@@ -3399,9 +3394,16 @@ const LoginView = (() => {
           const roleBadge = e.role !== "Employee"
             ? `<span class="emp-combo__role-badge">${e.role}</span>` : "";
           const initials = Utils.initialsOf(e.name);
+          const photoSrc = e._photoBlobUrl || e.photoUrl;
+          const avatarHtml = photoSrc
+            ? `<img src="${Utils.escapeHtml(photoSrc)}" alt="${Utils.escapeHtml(e.name)}"
+                 style="width:100%;height:100%;border-radius:50%;object-fit:cover;display:block;"
+                 onerror="this.style.display='none';this.nextElementSibling.style.display='flex';">
+               <div style="display:none;width:100%;height:100%;align-items:center;justify-content:center;">${initials}</div>`
+            : initials;
           return `
             <div class="emp-combo__item" data-id="${Utils.escapeHtml(e.id)}" data-name="${Utils.escapeHtml(e.name)}" data-idx="${i}">
-              <div class="emp-combo__avatar">${initials}</div>
+              <div class="emp-combo__avatar">${avatarHtml}</div>
               <div class="emp-combo__info">
                 <div class="emp-combo__name">${Utils.escapeHtml(e.name)} ${roleBadge}</div>
                 <div class="emp-combo__meta"><span class="emp-combo__code">${e.id}</span>${deptStr ? ' · ' + Utils.escapeHtml(deptStr) : ''}</div>
