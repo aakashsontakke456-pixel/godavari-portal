@@ -2110,8 +2110,7 @@ const SPAPI = (() => {
         targetCount: pick("targetcount", "target_count", "target count") || "Target_count",
         targetCash:  pick("targetcountcashverification", "target_count_cashverification", "targetcountcas", "target_count_cas", "target count cas"),
         lastLogin:   pick("lastlogindate", "lastlogin", "last login date") || "LastLoginDate",
-        photoUrl:    pick("photourl") || "PhotoURL",
-        photoUrlAlt: pick("employeephoto", "employee photo", "photo"),
+        photoUrl:    pick("photourl", "employeephoto", "employee photo", "photo") || "PhotoURL",
         officialMail:pick("officialmail", "official_mail", "official email") || "Official_mail",
         title:       "Title"
       };
@@ -2124,7 +2123,7 @@ const SPAPI = (() => {
         deptList: "Department_List", designation: "EMP_DESIGNATI", role: "Role",
         isPresent: "IsPresentToday", attendance: "AttendanceDis0",
         targetCount: "Target_count", targetCash: "Target_count_cas",
-        lastLogin: "LastLoginDate", photoUrl: "PhotoURL", photoUrlAlt: null,
+        lastLogin: "LastLoginDate", photoUrl: "PhotoURL",
         officialMail: "Official_mail", title: "Title"
       };
       return _fieldMap;
@@ -2136,7 +2135,7 @@ const SPAPI = (() => {
     let selectFields = [
       "ID", fm.title, fm.employeeId, fm.empName, fm.empPassword,
       fm.deptList, fm.designation, fm.role, fm.isPresent, fm.attendance,
-      fm.targetCount, fm.targetCash, fm.lastLogin, fm.photoUrl, fm.photoUrlAlt, fm.officialMail
+      fm.targetCount, fm.targetCash, fm.lastLogin, fm.photoUrl, fm.officialMail
     ].filter((v, i, a) => v && a.indexOf(v) === i); // deduplicate
 
     const headers = await _headers();
@@ -2204,43 +2203,17 @@ const SPAPI = (() => {
 })();
 
 // ── PhotoCache: fetch SP attachment photos with Bearer auth → blob URLs ──
-// SP attachment URLs (godavariurban.sharepoint.com/sites/.../Attachments/...)
-// return 401 when used as plain <img src>. We must fetch with Bearer token.
+// Photos are rendered directly as <img src>. SharePoint list attachment URLs
+// cannot be fetched from GitHub Pages because of CORS, but direct image URLs,
+// org-readable document-library URLs, and data:image/base64 URLs can render.
 const PhotoCache = (() => {
   const _cache = new Map(); // originalUrl → blobUrl | null
 
   async function getBlobUrl(photoUrl) {
     if (!photoUrl) return null;
-    // Base64 data URLs (new upload path) render directly — no fetch needed at all.
-    if (/^data:image\//i.test(photoUrl)) return photoUrl;
     if (_cache.has(photoUrl)) return _cache.get(photoUrl);
-    try {
-      if (/^https:\/\/[^/]*sharepoint\.com\//i.test(photoUrl)) {
-        try {
-          const graphBlob = await GraphAPI.downloadSharePointFile(photoUrl);
-          const graphBlobUrl = URL.createObjectURL(graphBlob);
-          _cache.set(photoUrl, graphBlobUrl);
-          return graphBlobUrl;
-        } catch (graphErr) {
-          // Old SharePoint "sharing link" URLs can't be resolved by Graph (no permission /
-          // link expired) and also can't render as a plain <img src>. Don't return the dead
-          // URL — return null so the UI falls back to initials immediately, no console spam.
-          _cache.set(photoUrl, null);
-          return null;
-        }
-      }
-      const token = await MSALAuth.getToken();
-      if (!token) { _cache.set(photoUrl, photoUrl); return photoUrl; }
-      const r = await fetch(photoUrl, { headers: { "Authorization": "Bearer " + token } });
-      if (!r.ok) { _cache.set(photoUrl, photoUrl); return photoUrl; }
-      const blobUrl = URL.createObjectURL(await r.blob());
-      _cache.set(photoUrl, blobUrl);
-      return blobUrl;
-    } catch (err) {
-      console.warn("Photo auth fetch failed; using direct SharePoint photo URL:", err.message);
-      _cache.set(photoUrl, photoUrl);
-      return photoUrl;
-    }
+    _cache.set(photoUrl, photoUrl);
+    return photoUrl;
   }
 
   async function preloadAll(employees) {
@@ -2248,7 +2221,6 @@ const PhotoCache = (() => {
       employees.filter(e => e.photoUrl).map(async e => {
         const b = await getBlobUrl(e.photoUrl);
         if (b) e._photoBlobUrl = b;
-        else e._photoBlobUrl = null; // explicit: dead link, don't let render fall back to raw photoUrl
       })
     );
   }
@@ -2257,7 +2229,6 @@ const PhotoCache = (() => {
 })();
 
 // Map SharePoint item → app employee object (uses dynamically discovered field names)
-let _photoDebugLogged = false;
 function _spItemToEmployee(item, fm) {
   // fm = fieldMap from SPAPI.discoverFields()
   // Fallback to common names if fm not provided
@@ -2278,6 +2249,10 @@ function _spItemToEmployee(item, fm) {
       if (trimmed.startsWith("{")) {
         try { return normalizePhotoUrl(JSON.parse(trimmed)); } catch (_) {}
       }
+      if (/^data:image\//i.test(trimmed)) return trimmed;
+      if (/^\/9j\/[A-Za-z0-9+/=]+$/.test(trimmed)) return `data:image/jpeg;base64,${trimmed}`;
+      if (/^iVBORw0KGgo[A-Za-z0-9+/=]+$/.test(trimmed)) return `data:image/png;base64,${trimmed}`;
+      if (/^UklGR[A-Za-z0-9+/=]+$/.test(trimmed)) return `data:image/webp;base64,${trimmed}`;
       return trimmed;
     }
     if (typeof value === "object") {
@@ -2292,6 +2267,11 @@ function _spItemToEmployee(item, fm) {
 
   // GU ID: prefer the EMPLOYEE_ID field, fall back to Title field (which holds "GU-xxxx" in some setups)
   const guId = fieldValue("employeeId") || fieldValue("title") || `SP-${item.ID}`;
+  const employeePhotoLibraryUrl = id => {
+    const cleanId = String(id || "").trim();
+    if (!cleanId) return null;
+    return `${SP_CONFIG.SITE_URL}/Shared%20Documents/Employee%20Photos/${encodeURIComponent(cleanId)}.jpeg`;
+  };
 
   const rawDept = fieldValue("deptList") || "";
   // Support comma-separated departments
@@ -2306,11 +2286,6 @@ function _spItemToEmployee(item, fm) {
   const cashVal   = fieldValue("targetCash");
   if (targetVal && depts[0]) targets[depts[0]] = Number(targetVal);
   if (cashVal) targets["Cash Verification"] = Number(cashVal);
-
-  if (!_photoDebugLogged && item.ID) {
-    console.log("PHOTO DEBUG — raw photoUrlAlt:", JSON.stringify(fieldValue("photoUrlAlt")), " raw photoUrl:", JSON.stringify(fieldValue("photoUrl")));
-    _photoDebugLogged = true;
-  }
 
   return {
     spId:       item.ID,
@@ -2327,7 +2302,13 @@ function _spItemToEmployee(item, fm) {
     targetCount: targetVal ? Number(targetVal) : null,
     targetCountCashVerification: cashVal ? Number(cashVal) : null,
     lastLoginDate: fieldValue("lastLogin") || "",
-    photoUrl:    normalizePhotoUrl(fieldValue("photoUrlAlt")) || normalizePhotoUrl(fieldValue("photoUrl")),
+    photoUrl:    (() => {
+      const url = normalizePhotoUrl(fieldValue("photoUrl"));
+      if (!url || /\/Lists\/EMPLOGINDATA\/Attachments\//i.test(url) || /sharepoint\.com\/:i:\//i.test(url)) {
+        return employeePhotoLibraryUrl(guId);
+      }
+      return url;
+    })(),
     officialMail:(fieldValue("officialMail") || "").trim().toLowerCase(),
     photoInitials: _initialsOf(fieldValue("empName") || "")
   };
@@ -2384,8 +2365,7 @@ function _employeeFieldMapFromColumns(cols) {
     targetCount: FieldNames.pick(cols, "targetcount", "target_count", "target count") || "Target_count",
     targetCash:  FieldNames.pick(cols, "targetcountcashverification", "target_count_cashverification", "targetcountcas", "target_count_cas", "target count cas"),
     lastLogin:   FieldNames.pick(cols, "lastlogindate", "lastlogin", "last login date") || "LastLoginDate",
-    photoUrl:    FieldNames.pick(cols, "photourl") || "PhotoURL",
-    photoUrlAlt: FieldNames.pick(cols, "employeephoto", "employee photo", "photo"),
+    photoUrl:    FieldNames.pick(cols, "photourl", "employeephoto", "employee photo", "photo") || "PhotoURL",
     officialMail:FieldNames.pick(cols, "officialmail", "official_mail", "official email") || "Official_mail",
     title:       "Title"
   };
@@ -4556,7 +4536,7 @@ const EmployeeManagementView = (() => {
                   return `
                   <tr>
                     <td>
-                      ${ (() => { const _src = e._photoBlobUrl !== undefined ? e._photoBlobUrl : e.photoUrl; return _src
+                      ${ (() => { const _src = e._photoBlobUrl || e.photoUrl; return _src
                         ? `<img src="${Utils.escapeHtml(_src)}" alt="${Utils.escapeHtml(e.name)}"
                              style="width:34px;height:34px;border-radius:50%;object-fit:cover;vertical-align:middle;border:1.5px solid var(--paper-line);"
                              onerror="this.style.display='none';this.nextElementSibling.style.display='inline-flex';">
@@ -4595,7 +4575,7 @@ const EmployeeManagementView = (() => {
             return `
             <div class="card card--pad" style="border-left:4px solid ${primaryDept ? primaryDept.color : '#ccc'};">
               <div style="display:flex; align-items:center; gap:12px; margin-bottom:14px;">
-                ${ (() => { const _src = e._photoBlobUrl !== undefined ? e._photoBlobUrl : e.photoUrl; return _src
+                ${ (() => { const _src = e._photoBlobUrl || e.photoUrl; return _src
                   ? `<img src="${Utils.escapeHtml(_src)}" alt="${Utils.escapeHtml(e.name)}"
                        style="width:46px;height:46px;border-radius:50%;object-fit:cover;border:2px solid ${primaryDept ? primaryDept.color : '#ccc'};"
                        onerror="this.style.display='none';this.nextElementSibling.style.display='flex';">
@@ -4683,6 +4663,8 @@ const EmployeeManagementView = (() => {
     const departments = Store.getDepartments();
     const assignedDepts = isEdit ? (emp.departments || (emp.department ? [emp.department] : [])) : [];
     const deptTargets = isEdit ? (emp.departmentTargets || {}) : {};
+    let selectedPhotoDataUrl = "";
+    let photoRemoved = false;
 
     const overlay = document.createElement("div");
     overlay.className = "modal-overlay";
@@ -4694,16 +4676,31 @@ const EmployeeManagementView = (() => {
         </div>
         <div class="modal__body">
           <form id="employee-form" autocomplete="off">
-            <div class="field" style="margin-bottom:14px; display:flex; align-items:center; gap:14px;">
-              <img id="ef-photo-preview" src="${ (isEdit && (emp._photoBlobUrl || emp.photoUrl)) ? Utils.escapeHtml(emp._photoBlobUrl || emp.photoUrl) : "" }"
-                   style="width:56px;height:56px;border-radius:50%;object-fit:cover;border:1.5px solid var(--paper-line); ${ (isEdit && (emp._photoBlobUrl || emp.photoUrl)) ? "" : "display:none;" }">
-              <div class="avatar-circle" id="ef-photo-fallback" style="width:56px;height:56px;font-size:17px; ${ (isEdit && (emp._photoBlobUrl || emp.photoUrl)) ? "display:none;" : "" }">${Utils.initialsOf(isEdit ? emp.name : "")}</div>
-              <div>
-                <label class="field__label">Employee photo</label>
-                <input type="file" id="ef-photo-input" accept="image/*" style="display:block; font-size:12px;">
-                <div style="font-size:11px; color:var(--ink-soft); margin-top:2px;">JPG/PNG, auto-resized. <span id="ef-photo-clear" style="${isEdit && emp.photoUrl ? "" : "display:none;"} cursor:pointer; text-decoration:underline;">Remove photo</span></div>
+            <div class="card--pad" style="background:var(--brand-tint); border-radius:var(--radius-md); padding:14px 16px; margin-bottom:16px;">
+              <div style="display:flex; gap:16px; align-items:flex-start; flex-wrap:wrap;">
+                <div>
+                  <div class="field__label" style="margin-bottom:8px;">Employee photo</div>
+                  <canvas id="ef-photo-canvas" width="160" height="160"
+                    style="width:112px;height:112px;border-radius:50%;background:var(--paper);border:2px solid var(--paper-line);display:block;"></canvas>
+                </div>
+                <div style="flex:1; min-width:240px;">
+                  <input type="file" id="ef-photo-file" accept="image/png,image/jpeg,image/webp" style="margin-bottom:10px;">
+                  <div id="ef-photo-tools" style="display:none; gap:10px; grid-template-columns:1fr 1fr; margin-bottom:8px;">
+                    <label style="font-size:12px;color:var(--ink-soft);">Zoom
+                      <input type="range" id="ef-photo-zoom" min="1" max="3" step="0.05" value="1" style="width:100%;">
+                    </label>
+                    <label style="font-size:12px;color:var(--ink-soft);">Vertical
+                      <input type="range" id="ef-photo-y" min="-80" max="80" step="1" value="0" style="width:100%;">
+                    </label>
+                  </div>
+                  <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                    <button type="button" class="btn btn--ghost btn--sm" id="ef-photo-clear">Remove photo</button>
+                    <span style="font-size:12px;color:var(--ink-soft);">Choose a photo, adjust crop, then save employee.</span>
+                  </div>
+                </div>
               </div>
             </div>
+
             <div class="field-grid">
               <div class="field">
                 <label class="field__label">Full name<span class="req">*</span></label>
@@ -4768,6 +4765,92 @@ const EmployeeManagementView = (() => {
     overlay.querySelector("#ef-cancel").addEventListener("click", close);
     overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
 
+    const canvas = overlay.querySelector("#ef-photo-canvas");
+    const ctx = canvas.getContext("2d");
+    const photoImg = new Image();
+    let photoReady = false;
+    let cropExportEnabled = false;
+
+    function drawInitialsPhoto() {
+      const name = overlay.querySelector("#ef-name")?.value || (isEdit ? emp.name : "");
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "#E8F0EC";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "#0D3B34";
+      ctx.font = "700 42px Arial";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(Utils.initialsOf(name), canvas.width / 2, canvas.height / 2);
+    }
+
+    function drawPhotoCrop() {
+      if (!photoReady) { drawInitialsPhoto(); return; }
+      const zoom = parseFloat(overlay.querySelector("#ef-photo-zoom").value || "1");
+      const offsetY = parseFloat(overlay.querySelector("#ef-photo-y").value || "0");
+      const size = canvas.width;
+      ctx.clearRect(0, 0, size, size);
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(0, 0, size, size);
+      const baseScale = Math.max(size / photoImg.width, size / photoImg.height);
+      const scale = baseScale * zoom;
+      const w = photoImg.width * scale;
+      const h = photoImg.height * scale;
+      const x = (size - w) / 2;
+      const y = (size - h) / 2 + offsetY;
+      ctx.drawImage(photoImg, x, y, w, h);
+      if (cropExportEnabled) {
+        try { selectedPhotoDataUrl = canvas.toDataURL("image/jpeg", 0.82); }
+        catch (_) { selectedPhotoDataUrl = ""; }
+      }
+    }
+
+    function loadPreview(src, allowCrop) {
+      photoImg.onload = () => {
+        photoReady = true;
+        cropExportEnabled = allowCrop;
+        overlay.querySelector("#ef-photo-tools").style.display = allowCrop ? "grid" : "none";
+        drawPhotoCrop();
+      };
+      photoImg.onerror = () => {
+        photoReady = false;
+        cropExportEnabled = false;
+        selectedPhotoDataUrl = "";
+        drawInitialsPhoto();
+      };
+      photoImg.src = src;
+    }
+
+    if (isEdit && emp.photoUrl) loadPreview(emp._photoBlobUrl || emp.photoUrl, false);
+    else drawInitialsPhoto();
+
+    overlay.querySelector("#ef-name").addEventListener("input", () => {
+      if (!photoReady) drawInitialsPhoto();
+    });
+    overlay.querySelector("#ef-photo-file").addEventListener("change", (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+      if (!/^image\//.test(file.type)) { Toast.error("Please choose an image file."); return; }
+      const reader = new FileReader();
+      reader.onload = () => {
+        photoRemoved = false;
+        overlay.querySelector("#ef-photo-zoom").value = "1";
+        overlay.querySelector("#ef-photo-y").value = "0";
+        loadPreview(reader.result, true);
+      };
+      reader.readAsDataURL(file);
+    });
+    overlay.querySelector("#ef-photo-zoom").addEventListener("input", drawPhotoCrop);
+    overlay.querySelector("#ef-photo-y").addEventListener("input", drawPhotoCrop);
+    overlay.querySelector("#ef-photo-clear").addEventListener("click", () => {
+      photoReady = false;
+      cropExportEnabled = false;
+      selectedPhotoDataUrl = "";
+      photoRemoved = true;
+      overlay.querySelector("#ef-photo-file").value = "";
+      overlay.querySelector("#ef-photo-tools").style.display = "none";
+      drawInitialsPhoto();
+    });
+
     // Render per-dept target inputs
     function renderTargetInputs() {
       const checked = [...overlay.querySelectorAll(".dept-chk:checked")].map(cb => cb.value);
@@ -4802,64 +4885,6 @@ const EmployeeManagementView = (() => {
       cb.addEventListener("change", renderTargetInputs);
     });
     renderTargetInputs();
-
-    // ── Photo upload: resize client-side and convert to base64 data URL ──
-    let pendingPhoto = isEdit ? (emp.photoUrl || null) : null;
-    let photoCleared = false;
-    const photoInput = overlay.querySelector("#ef-photo-input");
-    const photoPreview = overlay.querySelector("#ef-photo-preview");
-    const photoFallback = overlay.querySelector("#ef-photo-fallback");
-    const photoClearBtn = overlay.querySelector("#ef-photo-clear");
-
-    function setPhotoPreview(src) {
-      if (src) {
-        photoPreview.src = src;
-        photoPreview.style.display = "";
-        photoFallback.style.display = "none";
-      } else {
-        photoPreview.style.display = "none";
-        photoFallback.style.display = "";
-      }
-    }
-
-    photoInput.addEventListener("change", () => {
-      const file = photoInput.files && photoInput.files[0];
-      if (!file) return;
-      if (!file.type.startsWith("image/")) { Toast.error("Please choose an image file."); return; }
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        const img = new Image();
-        img.onload = () => {
-          // Resize so the longest side is ~200px, keeping base64 small enough for a SharePoint text column.
-          const maxSide = 200;
-          let { width, height } = img;
-          if (width > height && width > maxSide) { height = Math.round(height * (maxSide / width)); width = maxSide; }
-          else if (height > maxSide) { width = Math.round(width * (maxSide / height)); height = maxSide; }
-          const canvas = document.createElement("canvas");
-          canvas.width = width; canvas.height = height;
-          canvas.getContext("2d").drawImage(img, 0, 0, width, height);
-          const dataUrl = canvas.toDataURL("image/jpeg", 0.7);
-          pendingPhoto = dataUrl;
-          photoCleared = false;
-          photoClearBtn.style.display = "";
-          setPhotoPreview(dataUrl);
-        };
-        img.src = ev.target.result;
-      };
-      reader.readAsDataURL(file);
-    });
-
-    photoClearBtn.addEventListener("click", () => {
-      pendingPhoto = null;
-      photoCleared = true;
-      photoInput.value = "";
-      photoClearBtn.style.display = "none";
-      setPhotoPreview(null);
-    });
-
-    overlay.querySelector("#ef-name").addEventListener("input", (e) => {
-      if (!pendingPhoto) photoFallback.textContent = Utils.initialsOf(e.target.value);
-    });
 
     overlay.querySelector("#ef-save").addEventListener("click", async () => {
       const name = document.getElementById("ef-name").value.trim();
@@ -4900,9 +4925,9 @@ const EmployeeManagementView = (() => {
       };
 
       if (isEdit && emp.spId) record.spId = emp.spId;
-      if (pendingPhoto) record.photoUrl = pendingPhoto;
-      else if (photoCleared) record.photoUrl = "";
-      else if (isEdit && emp.photoUrl) record.photoUrl = emp.photoUrl;
+      if (selectedPhotoDataUrl) record.photoUrl = selectedPhotoDataUrl;
+      else if (isEdit && emp.photoUrl && !photoRemoved) record.photoUrl = emp.photoUrl;
+      else record.photoUrl = "";
 
       const saveBtn = overlay.querySelector("#ef-save");
       saveBtn.disabled = true;
@@ -6015,6 +6040,7 @@ const App = (() => {
     if (!user) { LoginView.render(); return; }
 
     const nav = navFor(user.role);
+    const userPhotoSrc = user._photoBlobUrl || user.photoUrl || "";
     const pendingCount = user.role === "Manager"
       ? Store.getWorkLogs().filter(l => l.approvalStatus === "Pending").length
       : 0;
@@ -6036,7 +6062,9 @@ const App = (() => {
           <div class="topbar__clock" id="topbar-clock">${Utils.formatDateLong(Utils.todayISO())}<br>${Utils.nowTime()}</div>
           
           <div class="topbar__user">
-            <div class="topbar__avatar">${Utils.initialsOf(user.name)}</div>
+            ${userPhotoSrc
+              ? `<img class="topbar__avatar" src="${Utils.escapeHtml(userPhotoSrc)}" alt="${Utils.escapeHtml(user.name)}" style="object-fit:cover;" onerror="this.outerHTML='<div class=&quot;topbar__avatar&quot;>${Utils.initialsOf(user.name)}</div>';">`
+              : `<div class="topbar__avatar">${Utils.initialsOf(user.name)}</div>`}
             <div>
               <div class="topbar__user-name">${Utils.escapeHtml(user.name)}</div>
               <div class="topbar__user-role">${Utils.escapeHtml(user.role)} · ${Utils.escapeHtml(user.id)}</div>
