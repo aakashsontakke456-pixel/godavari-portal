@@ -2728,7 +2728,11 @@ const Store = (() => {
     set(pick("date"), log.date);
     set(pick("designation"), log.designation);
     set(pick("departments"), log.departmentName);
-    set(pick("department"), log.departmentName);
+    // NOTE: do NOT also write to the singular "Department" column. It is a
+    // separate, legacy column (often a Lookup type) that SharePoint rejects
+    // plain-string writes to with a 400. It's only ever read as a fallback
+    // (see _workLogFromGraphItem) when "Departments" is empty — "Departments"
+    // is the column that actually needs the value, and it already gets it above.
     set(pick("total file done"), log.totalFileDone);
     set(pick("manager approval status"), log.approvalStatus);
     set(pick("total productivity"), log.productivityPct);
