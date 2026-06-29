@@ -366,7 +366,17 @@ input[type="checkbox"] { width: auto; accent-color: var(--brand); }
 
 .btn--primary { background: var(--brand); color: #fff; }
 .btn--primary:hover { background: var(--brand-deep); }
-.btn--primary:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn--primary:disabled { opacity: 0.75; cursor: not-allowed; }
+
+.btn-spinner {
+  width: 14px; height: 14px;
+  border: 2px solid rgba(255,255,255,0.4);
+  border-top-color: #fff;
+  border-radius: 50%;
+  display: inline-block;
+  animation: btn-spin 0.7s linear infinite;
+}
+@keyframes btn-spin { to { transform: rotate(360deg); } }
 
 .btn--amber { background: var(--amber); color: #fff; }
 .btn--amber:hover { background: #c4791f; }
@@ -2942,17 +2952,37 @@ const Store = (() => {
     const coreFields = _workLogCoreFields(log, cols);
     const taskFields = _workLogTaskFields(log, cols);
     let fieldFailures = [];
+
     if (existing && existing.spId) {
-      fieldFailures = fieldFailures.concat(await _patchFieldsIndividually(SP_CONFIG.WORKLOG_LIST_NAME, existing.spId, coreFields, "Work log core"));
-      fieldFailures = fieldFailures.concat(await _patchFieldsIndividually(SP_CONFIG.WORKLOG_LIST_NAME, existing.spId, taskFields, "Work log task"));
+      // Fast path: one PATCH with everything. updateItem already retries and
+      // strips any single field SharePoint names as the culprit, so this
+      // only falls back to slow per-field PATCHes if something more
+      // unusual goes wrong (e.g. multiple unrelated bad fields at once).
+      try {
+        await GraphAPI.updateItem(SP_CONFIG.WORKLOG_LIST_NAME, existing.spId, { ...coreFields, ...taskFields });
+      } catch (err) {
+        console.warn("Batched update failed, falling back to per-field save:", err.message);
+        fieldFailures = fieldFailures.concat(await _patchFieldsIndividually(SP_CONFIG.WORKLOG_LIST_NAME, existing.spId, coreFields, "Work log core"));
+        fieldFailures = fieldFailures.concat(await _patchFieldsIndividually(SP_CONFIG.WORKLOG_LIST_NAME, existing.spId, taskFields, "Work log task"));
+      }
     } else {
+      // Fast path: create the item with every field in the same POST.
+      // createItem already retries and strips a single bad field by name,
+      // so this is just as safe as the old create-then-patch flow but in
+      // one round trip instead of up to twenty.
       const title = coreFields.Title || `${log.employeeId || "EMP"}-${log.date || Utils.todayISO()}`;
-      const created = await GraphAPI.createItem(SP_CONFIG.WORKLOG_LIST_NAME, { Title: title });
-      const spId = created._graphId || created.ID;
-      delete coreFields.Title;
-      fieldFailures = fieldFailures.concat(await _patchFieldsIndividually(SP_CONFIG.WORKLOG_LIST_NAME, spId, coreFields, "Work log core"));
-      fieldFailures = fieldFailures.concat(await _patchFieldsIndividually(SP_CONFIG.WORKLOG_LIST_NAME, spId, taskFields, "Work log task"));
+      try {
+        await GraphAPI.createItem(SP_CONFIG.WORKLOG_LIST_NAME, { Title: title, ...coreFields, ...taskFields });
+      } catch (err) {
+        console.warn("Batched create failed, falling back to create-then-patch:", err.message);
+        const created = await GraphAPI.createItem(SP_CONFIG.WORKLOG_LIST_NAME, { Title: title });
+        const spId = created._graphId || created.ID;
+        delete coreFields.Title;
+        fieldFailures = fieldFailures.concat(await _patchFieldsIndividually(SP_CONFIG.WORKLOG_LIST_NAME, spId, coreFields, "Work log core"));
+        fieldFailures = fieldFailures.concat(await _patchFieldsIndividually(SP_CONFIG.WORKLOG_LIST_NAME, spId, taskFields, "Work log task"));
+      }
     }
+
     await _loadWorkLogsFromGraph();
     SPConnection.setStatus("live");
     if (fieldFailures.length) {
@@ -3934,7 +3964,7 @@ const LogWorkView = (() => {
 
             <div style="display:flex; gap:10px; justify-content:flex-end;">
               <button type="button" class="btn btn--ghost" id="lw-cancel">Cancel</button>
-              <button type="submit" class="btn btn--primary">${editingLog ? "Save changes" : "Submit work log"}</button>
+              <button type="submit" class="btn btn--primary" id="lw-submit-btn">${editingLog ? "Save changes" : "Submit work log"}</button>
             </div>
           </form>
         </div>
@@ -4132,6 +4162,9 @@ const LogWorkView = (() => {
   async function handleSubmit(e, user, isManagerEntry) {
     e.preventDefault();
 
+    const submitBtn = document.getElementById("lw-submit-btn");
+    if (submitBtn && submitBtn.disabled) return; // already saving — ignore extra clicks
+
     if (!currentDeptKey) {
       Toast.error("Please select a department.");
       return;
@@ -4171,6 +4204,12 @@ const LogWorkView = (() => {
       createdAt: editingLogId ? Store.getWorkLogById(editingLogId).createdAt : new Date().toISOString()
     };
 
+    const originalLabel = submitBtn ? submitBtn.innerHTML : "";
+    if (submitBtn) {
+      submitBtn.disabled = true;
+      submitBtn.innerHTML = `<span class="btn-spinner" aria-hidden="true"></span> Saving to SharePoint...`;
+    }
+
     try {
       const saved = await Store.saveWorkLog(log);
       Toast.success(editingLogId ? "Work log updated in SharePoint." : "Work log submitted to SharePoint.");
@@ -4181,6 +4220,10 @@ const LogWorkView = (() => {
       App.navigate(isManagerEntry ? "manager-dashboard" : "dashboard");
     } catch (err) {
       Toast.error("Save failed: " + err.message);
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = originalLabel;
+      }
     }
   }
 
@@ -5126,6 +5169,12 @@ const ApprovalsView = (() => {
     document.getElementById("btn-bulk-approve").addEventListener("click", async () => {
       if (selectedIds.size === 0) return;
       const count = selectedIds.size;
+      const bulkBtn = document.getElementById("btn-bulk-approve");
+      const selectAllBtn = document.getElementById("btn-select-all");
+      bulkBtn.disabled = true;
+      if (selectAllBtn) selectAllBtn.disabled = true;
+      const originalLabel = bulkBtn.innerHTML;
+      bulkBtn.innerHTML = `<span class="btn-spinner" aria-hidden="true"></span> Approving...`;
       try {
         await Store.bulkApprove([...selectedIds]);
         Toast.success(`Approved ${count} entr${count === 1 ? "y" : "ies"} in SharePoint.`);
@@ -5133,6 +5182,9 @@ const ApprovalsView = (() => {
         App.refresh();
       } catch (err) {
         Toast.error("Approval failed: " + err.message);
+        bulkBtn.disabled = false;
+        if (selectAllBtn) selectAllBtn.disabled = false;
+        bulkBtn.innerHTML = originalLabel;
       }
     });
 
@@ -5183,28 +5235,64 @@ const ApprovalsView = (() => {
     });
     area.querySelectorAll("[data-approve]").forEach(btn => {
       btn.addEventListener("click", async () => {
+        const row = btn.closest(".ledger-card");
+        const siblingBtns = row ? row.querySelectorAll("button") : [btn];
+        siblingBtns.forEach(b => b.disabled = true);
+        const originalLabel = btn.innerHTML;
+        btn.innerHTML = `<span class="btn-spinner" aria-hidden="true"></span> Approving...`;
         try {
           await Store.setApprovalStatus(btn.dataset.approve, "Approved");
           Toast.success("Entry approved in SharePoint.");
           App.refresh();
         } catch (err) {
           Toast.error("Approval failed: " + err.message);
+          siblingBtns.forEach(b => b.disabled = false);
+          btn.innerHTML = originalLabel;
         }
       });
     });
     area.querySelectorAll("[data-reject]").forEach(btn => {
-      btn.addEventListener("click", async () => {
-        try {
-          await Store.setApprovalStatus(btn.dataset.reject, "Rejected");
-          Toast.info("Entry rejected in SharePoint.");
-          App.refresh();
-        } catch (err) {
-          Toast.error("Rejection failed: " + err.message);
-        }
-      });
+      btn.addEventListener("click", () => confirmReject(btn.dataset.reject, container, user));
     });
     area.querySelectorAll("[data-view]").forEach(btn => {
       btn.addEventListener("click", () => showDetail(Store.getWorkLogById(btn.dataset.view)));
+    });
+  }
+
+  function confirmReject(logId, container, user) {
+    const log = Store.getWorkLogById(logId);
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    overlay.innerHTML = `
+      <div class="modal" style="max-width:420px;">
+        <div class="modal__header"><h2>Reject this entry?</h2><button class="modal__close">&times;</button></div>
+        <div class="modal__body">
+          <p>This will mark <strong>${Utils.escapeHtml(log ? log.employeeName : "this entry")}</strong>'s work log${log ? ` for ${Utils.formatDateLong(log.date)}` : ""} as rejected. The employee may need to re-submit it.</p>
+        </div>
+        <div class="modal__footer">
+          <button class="btn btn--ghost" id="cancel-reject">Cancel</button>
+          <button class="btn btn--danger" id="confirm-reject">Reject entry</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    const close = () => overlay.remove();
+    overlay.querySelector(".modal__close").addEventListener("click", close);
+    overlay.querySelector("#cancel-reject").addEventListener("click", close);
+    overlay.querySelector("#confirm-reject").addEventListener("click", async () => {
+      const btn = overlay.querySelector("#confirm-reject");
+      btn.disabled = true;
+      btn.innerHTML = `<span class="btn-spinner" aria-hidden="true"></span> Rejecting...`;
+      try {
+        await Store.setApprovalStatus(logId, "Rejected");
+        Toast.info("Entry rejected in SharePoint.");
+        close();
+        App.refresh();
+      } catch (err) {
+        Toast.error("Rejection failed: " + err.message);
+        btn.disabled = false;
+        btn.innerHTML = "Reject entry";
+      }
     });
   }
 
