@@ -1794,19 +1794,13 @@ const MSALAuth = (() => {
 
   async function login() {
     if (!_msalInstance) throw new Error("MSAL not initialised");
-    try {
-      const r = await _msalInstance.loginPopup({ scopes: SP_CONFIG.SCOPE, prompt: "select_account" });
-      _account = r.account;
-      _spRef.v  = r.accessToken;
-      _spRef.exp = r.expiresOn.getTime();
-      // Pre-warm Graph token silently after SP login
-      try { await _silentToken(SP_CONFIG.GRAPH_SCOPE, _grRef); } catch(_) {}
-      return _account;
-    } catch (e) {
-      if (e.errorCode === "popup_window_error" || e.message.includes("popup"))
-        throw new Error("Popup was blocked. Please allow popups for this page and try again.");
-      throw e;
-    }
+    // Redirect-based login: this navigates the whole page to Microsoft's
+    // sign-in screen. It does NOT return — the browser leaves this page.
+    // After the user signs in, Microsoft redirects back to this same URL,
+    // and init() (via handleRedirectPromise) picks up the result on reload.
+    // This avoids popup-blocker and Cross-Origin-Opener-Policy issues that
+    // affect loginPopup() on some hosts (e.g. GitHub Pages).
+    await _msalInstance.loginRedirect({ scopes: SP_CONFIG.SCOPE, prompt: "select_account" });
   }
 
   async function getToken() {
@@ -1824,7 +1818,7 @@ const MSALAuth = (() => {
   function getAccount() { return _account; }
   function isLoggedIn()  { return !!_account && !!_msalInstance; }
   function logout() {
-    if (_msalInstance && _account) _msalInstance.logoutPopup({ account: _account });
+    if (_msalInstance && _account) _msalInstance.logoutRedirect({ account: _account });
     _account = null; _spRef.v = null; _grRef.v = null;
   }
 
@@ -2525,17 +2519,15 @@ const Store = (() => {
     document.getElementById("btn-ms-login").addEventListener("click", async () => {
       const btn = document.getElementById("btn-ms-login");
       const errEl = document.getElementById("ms-login-error");
-      btn.textContent = "Signing in…";
+      btn.textContent = "Redirecting to Microsoft sign-in…";
       btn.disabled = true;
       errEl.style.display = "none";
       try {
+        // loginRedirect() navigates the whole page away to Microsoft — it does
+        // not resolve here. After sign-in, Microsoft redirects back to this
+        // same URL and init()/handleRedirectPromise() continues the boot flow
+        // on that reload (loading SharePoint data, then App.boot()).
         await MSALAuth.login();
-        btn.textContent = "Loading SharePoint data…";
-        await _loadFromSP();
-        if (!_readLocal(STORAGE_KEYS.SEEDED, false)) {
-          _writeLocal(STORAGE_KEYS.SEEDED, true);
-        }
-        App.boot();
       } catch (e) {
         errEl.innerHTML = "<strong>⚠️ Connection failed:</strong> " + e.message +
           "<br><small>Please check your internet connection and try again.</small>";
