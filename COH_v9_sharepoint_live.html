@@ -3729,7 +3729,18 @@ const LogWorkView = (() => {
   let formData = {};
 
   function render(container, user, params) {
-    editingLogId = params && params.logId ? params.logId : null;
+    const newLogId = params && params.logId ? params.logId : null;
+
+    // Guard: if the user is already actively filling in this form (same context),
+    // do NOT re-initialise formData or currentDeptKey — that would wipe their work.
+    const isAlreadyActive = container.querySelector && container.querySelector(".dept-field-input") !== null;
+    const isSameContext = isAlreadyActive && newLogId === editingLogId;
+    if (isSameContext) {
+      // Silently skip the re-render — the form is already live with user's data intact.
+      return;
+    }
+
+    editingLogId = newLogId;
     const editingLog = editingLogId ? Store.getWorkLogById(editingLogId) : null;
 
     currentDeptKey = editingLog ? editingLog.departmentKey
@@ -6008,7 +6019,19 @@ const App = (() => {
       try {
         await Store.refreshFromSP();
         SPConnection.setStatus("live");
-        if (Store.currentUser()) renderShell();
+        if (Store.currentUser()) {
+          // Do NOT re-render the shell if the user is actively filling in the log-work form.
+          // Re-rendering would wipe their in-progress field values.
+          // Instead, only update the connection badge and non-form parts of the UI.
+          const isOnLogWork = state.route === "log-work";
+          const hasFormData = isOnLogWork && document.querySelector(".dept-field-input");
+          if (hasFormData) {
+            // Just update the connection badge status silently — don't touch the form
+            SPConnection.setStatus("live");
+          } else {
+            renderShell();
+          }
+        }
       } catch (err) {
         SPConnection.setStatus("offline");
         console.warn("Live SharePoint refresh failed:", err.message);
@@ -6140,7 +6163,10 @@ const App = (() => {
         try {
           await Store.refreshFromSP();
           Toast.success("Refreshed from SharePoint.");
-          renderShell();
+          // Don't wipe the log-work form if user has started filling it in
+          const isOnLogWork = state.route === "log-work";
+          const hasFormData = isOnLogWork && document.querySelector(".dept-field-input");
+          if (!hasFormData) renderShell();
         } catch (e) {
           Toast.error("Could not reach SharePoint.");
         } finally {
