@@ -2306,7 +2306,7 @@ function _employeeToSpBody(emp, fm) {
     deptList: "Department_List", designation: "EMP_DESIGNATI", role: "Role",
     isPresent: "IsPresentToday", attendance: "AttendanceDis0",
     targetCount: "Target_count", targetCash: "Target_count_cas",
-    lastLogin: "LastLoginDate", photoUrl: "PhotoURL"
+    lastLogin: "LastLoginDate", photoUrl: "PhotoURL", officialMail: "Official_mail"
   };
   const body = {};
   const departmentsText = Array.isArray(emp.departments) && emp.departments.length
@@ -2326,6 +2326,7 @@ function _employeeToSpBody(emp, fm) {
   setField("targetCash", emp.targetCountCashVerification);
   setField("lastLogin", emp.lastLoginDate);
   setField("photoUrl", emp.photoUrl);
+  setField("officialMail", emp.officialMail);
   return body;
 }
 
@@ -2773,6 +2774,32 @@ const Store = (() => {
     return emp;
   }
 
+  // Writes the currently signed-in Microsoft 365 email back to SharePoint as
+  // this employee's Official_mail — always overwrites with the latest sign-in
+  // (by design: this field tracks "whoever most recently signed in as this
+  // employee", not a fixed assignment). Fails silently on error so a SharePoint
+  // hiccup never blocks someone from completing login.
+  async function updateOfficialMail(empId, mail) {
+    const existing = _empCache.find(e => e.id === empId);
+    if (!_spAvailable || !existing || !existing.spId || !mail) return;
+    const normalizedMail = String(mail).trim().toLowerCase();
+    if ((existing.officialMail || "").trim().toLowerCase() === normalizedMail) return; // already up to date
+    const fm = _fieldMap || {};
+    const field = fm.officialMail || "Official_mail";
+    const body = { [field]: normalizedMail };
+    try {
+      try { await GraphAPI.updateItem(SP_CONFIG.LIST_NAME, existing.spId, body); }
+      catch (graphErr) {
+        console.warn("Graph Official_mail update failed; trying SharePoint REST fallback:", graphErr.message);
+        await SPAPI.updateItem(existing.spId, body);
+      }
+      const idx = _empCache.findIndex(e => e.id === empId);
+      if (idx > -1) _empCache[idx] = { ..._empCache[idx], officialMail: normalizedMail };
+    } catch (err) {
+      console.warn("Could not update Official_mail in SharePoint:", err.message);
+    }
+  }
+
   async function deleteEmployee(id) {
     const emp = _empCache.find(e => e.id === id);
     if (!emp) return;
@@ -2972,7 +2999,7 @@ const Store = (() => {
 
   return {
     init, resetToSeed, refreshFromSP,
-    getEmployees, getEmployeeById, saveEmployee, deleteEmployee, nextEmployeeNumericId,
+    getEmployees, getEmployeeById, saveEmployee, updateOfficialMail, deleteEmployee, nextEmployeeNumericId,
     getWorkLogs, getWorkLogsByEmployee, getWorkLogById, saveWorkLog, deleteWorkLog,
     nextWorkLogId, setApprovalStatus, bulkApprove,
     getSession, setSession, clearSession, currentUser,
@@ -3214,11 +3241,11 @@ const LoginView = (() => {
             <rect x="0" y="11" width="10" height="10" fill="#00A4EF"/>
             <rect x="11" y="11" width="10" height="10" fill="#FFB900"/>
           </svg>
-          <span>
+          <span style="flex:1;">
             <strong>Microsoft 365 signed in</strong> as <em style="color:var(--brand);">${email ? Utils.escapeHtml(email) : "—"}</em><br>
-            <span style="font-size:11.5px;color:var(--ink-soft);">
-              Your employee account's <em>Official Mail</em> must match this address.
-            </span>
+            <button type="button" id="btn-switch-m365" style="margin-top:4px;background:none;border:none;
+              padding:0;color:var(--brand);font-size:11.5px;font-weight:600;text-decoration:underline;
+              cursor:pointer;">Switch Microsoft 365 account</button>
           </span>
         </div>`;
     }
@@ -3286,6 +3313,20 @@ const LoginView = (() => {
     initCombo(employees);
     document.getElementById("login-form").addEventListener("submit", handleSubmit);
     document.getElementById("btn-admin-login").addEventListener("click", renderAdminLogin);
+
+    const switchBtn = document.getElementById("btn-switch-m365");
+    if (switchBtn) {
+      switchBtn.addEventListener("click", () => {
+        // logoutRedirect() navigates away to Microsoft to end this session,
+        // then redirects back here. On return, MSALAuth.isLoggedIn() is false,
+        // so the app shows the "Sign in with Microsoft 365" screen again —
+        // Microsoft's own account picker (prompt: select_account) lets the
+        // person choose a different account from there.
+        switchBtn.textContent = "Signing out…";
+        switchBtn.disabled = true;
+        MSALAuth.logout();
+      });
+    }
   }
 
   function renderAdminLogin() {
@@ -3507,29 +3548,6 @@ const LoginView = (() => {
       return;
     }
 
-    // ── Official_mail check ──────────────────────────────────────────────
-    // If the employee has an Official_mail set in SharePoint, the M365 account
-    // used to sign in must match it. This prevents one employee from logging
-    // in under another employee's COH account.
-    if (MSALAuth.isLoggedIn()) {
-      const msAccount = MSALAuth.getAccount();
-      const msEmail   = (msAccount?.username || "").trim().toLowerCase();
-      const empMail   = (emp.officialMail || "").trim().toLowerCase();
-
-      if (empMail && msEmail && empMail !== msEmail) {
-        errorEl.innerHTML =
-          `<strong>⚠️ Microsoft account mismatch.</strong><br>
-           You are signed in as <em>${Utils.escapeHtml(msEmail)}</em>, but employee
-           <strong>${Utils.escapeHtml(emp.id)}</strong> is linked to
-           <em>${Utils.escapeHtml(emp.officialMail)}</em>.<br>
-           Please sign out of Microsoft 365 and sign in with the correct account,
-           or ask your administrator to update the Official Mail for this employee.`;
-        errorEl.style.display = "block";
-        return;
-      }
-    }
-    // ────────────────────────────────────────────────────────────────────
-
     if (emp.password !== pass) {
       errorEl.textContent = "Incorrect password for this employee ID.";
       errorEl.style.display = "block";
@@ -3538,6 +3556,18 @@ const LoginView = (() => {
 
     errorEl.style.display = "none";
     Store.setSession(emp);
+
+    // Record whichever Microsoft 365 account is currently signed in as this
+    // employee's Official_mail in SharePoint — always overwrites with the
+    // latest sign-in. There is no requirement that this match any previous
+    // value; anyone with the correct GU ID + password may sign in with any
+    // Microsoft 365 account, and that account becomes the one on file.
+    if (MSALAuth.isLoggedIn()) {
+      const msAccount = MSALAuth.getAccount();
+      const msEmail = (msAccount?.username || "").trim();
+      if (msEmail) Store.updateOfficialMail(emp.id, msEmail).catch(() => {});
+    }
+
     Toast.success(`Welcome back, ${emp.name.split(" ")[0]}.`);
     App.boot();
   }
@@ -6079,6 +6109,18 @@ const App = (() => {
               `).join("")}
             </div>
             <div class="sidebar__bottom">
+              ${(() => {
+                if (!MSALAuth.isLoggedIn()) return "";
+                const acct = MSALAuth.getAccount();
+                const email = acct && acct.username ? acct.username : "";
+                if (!email) return "";
+                return `
+                  <div style="padding:8px 12px;margin-bottom:6px;font-size:11px;color:var(--ink-soft);
+                    line-height:1.4;border-top:1px solid var(--paper-line);padding-top:10px;">
+                    <div style="font-weight:600;color:var(--ink);">Microsoft 365</div>
+                    <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${Utils.escapeHtml(email)}">${Utils.escapeHtml(email)}</div>
+                  </div>`;
+              })()}
               <button class="btn-logout-sidebar" id="btn-logout">&#9211; Log out</button>
             </div>
           </nav>
