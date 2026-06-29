@@ -1668,6 +1668,31 @@ const FieldNames = (() => {
       .replace(/[^a-z0-9]/g, "");
   }
 
+  // SharePoint auto-generates internal names like "field_3", "field_12" for
+  // columns that don't have a clean, stable internal name (e.g. created via
+  // certain UI flows, or renamed after creation). These columns are usually
+  // also missing a real Title/displayName. They should never be treated as a
+  // legitimate fuzzy-match target for one of our known field labels — if we
+  // can't find a column with a real name, the column genuinely isn't there.
+  function isGenericAutoName(name) {
+    return /^field_?\d+$/i.test(String(name || "").trim());
+  }
+
+  // Columns Graph will reject (or silently corrupt) on a plain-value PATCH:
+  // read-only/calculated columns can't be written at all, and
+  // lookup/personOrGroup/choice columns need a special payload shape
+  // ({FieldNameId: ...} etc.) rather than the raw value our forms collect.
+  function isWriteUnsafe(col) {
+    if (!col) return true;
+    if (col.readOnly || col.hidden || col.calculated) return true;
+    if (col.lookup || col.personOrGroup) return true;
+    // A column with no real display name anywhere is one we can't safely
+    // identify — even if Graph would technically accept a write to it.
+    const hasRealName = [col.Title, col.displayName].some(n => key(n));
+    if (!hasRealName && isGenericAutoName(col.InternalName || col.name)) return true;
+    return false;
+  }
+
   function buildLookup(cols) {
     const map = {};
     (cols || []).forEach(c => {
@@ -1691,13 +1716,14 @@ const FieldNames = (() => {
     if (direct) return direct;
       const wanted = names.map(key).filter(Boolean);
       const partial = (cols || []).find(c => {
+        if (isWriteUnsafe(c)) return false; // never fuzzy-match onto a generic/unsafe column
         const candidates = [c.Title, c.InternalName, c.displayName, c.name].map(key);
         return wanted.some(w => candidates.some(v => v && v.includes(w)));
       });
       return partial ? (partial.InternalName || partial.name) : null;
   }
 
-  return { key, buildLookup, pickExact, pick };
+  return { key, buildLookup, pickExact, pick, isGenericAutoName, isWriteUnsafe };
 })();
 
 // SharePoint internal field names (verified from list column names in SP UI)
@@ -1863,6 +1889,24 @@ const GraphAPI = (() => {
   const _lists = new Map();
   const _columns = new Map();
 
+  // SharePoint/Graph reject a field write for several different reasons, each
+  // with its own message shape. We only ever want to strip the ONE field
+  // actually named in the error, never guess — if we can't extract a name
+  // confidently, we leave the error alone and let it surface normally.
+  function _extractRejectedField(message) {
+    const patterns = [
+      /Field '([^']+)' is read-only/i,
+      /Field '([^']+)' .*?(?:could not be found|does not exist)/i,
+      /Invalid (?:request|value) .*?field '([^']+)'/i,
+      /column '([^']+)' .*?(?:read.?only|cannot be updated|is not valid)/i
+    ];
+    for (const re of patterns) {
+      const m = message.match(re);
+      if (m && m[1]) return m[1];
+    }
+    return null;
+  }
+
   async function _headers(write = false) {
     const token = await MSALAuth.getGraphToken();
     if (!token) throw new Error("Microsoft Graph token unavailable");
@@ -1918,7 +1962,13 @@ const GraphAPI = (() => {
     if (_columns.has(listName)) return _columns.get(listName);
     const sid = await siteId();
     const list = await listInfo(listName);
-    const data = await _fetch(`/sites/${sid}/lists/${list.id}/columns?$select=name,displayName,columnGroup`);
+    // Pull the type facets too (lookup/personOrGroup/calculated/choice/readOnly).
+    // Without these we can only find out a column is write-incompatible by
+    // sending a PATCH and watching it 400 — these flags let us skip it up front.
+    const data = await _fetch(
+      `/sites/${sid}/lists/${list.id}/columns` +
+      `?$select=name,displayName,columnGroup,readOnly,hidden,lookup,personOrGroup,calculated,choice`
+    );
     const cols = data.value || [];
     _columns.set(listName, cols);
     return cols;
@@ -1954,9 +2004,9 @@ const GraphAPI = (() => {
         });
         break;
       } catch (err) {
-        const readOnly = (err.message.match(/Field '([^']+)' is read-only/i) || [])[1];
+        const readOnly = _extractRejectedField(err.message);
         if (!readOnly || !(readOnly in bodyFields)) throw err;
-        console.warn(`Graph create ignored read-only SharePoint field: ${readOnly}`);
+        console.warn(`Graph create ignored read-only/invalid SharePoint field: ${readOnly}`);
         delete bodyFields[readOnly];
       }
     }
@@ -1969,6 +2019,12 @@ const GraphAPI = (() => {
     const list = await listInfo(listName);
     let bodyFields = { ...fields };
     for (let attempt = 0; attempt < 5; attempt++) {
+      if (Object.keys(bodyFields).length === 0) {
+        // Every field we tried to write got stripped out as read-only/invalid.
+        // Sending an empty PATCH would look like a silent success and hide
+        // that nothing was actually saved — surface it as a real failure.
+        throw new Error("All fields in this update were rejected by SharePoint (read-only or unsupported column).");
+      }
       try {
         await _fetch(`/sites/${sid}/lists/${list.id}/items/${itemId}/fields`, {
           method: "PATCH",
@@ -1976,9 +2032,9 @@ const GraphAPI = (() => {
         });
         return true;
       } catch (err) {
-        const readOnly = (err.message.match(/Field '([^']+)' is read-only/i) || [])[1];
+        const readOnly = _extractRejectedField(err.message);
         if (!readOnly || !(readOnly in bodyFields)) throw err;
-        console.warn(`Graph update ignored read-only SharePoint field: ${readOnly}`);
+        console.warn(`Graph update ignored read-only/invalid SharePoint field: ${readOnly}`);
         delete bodyFields[readOnly];
       }
     }
@@ -2650,6 +2706,8 @@ const Store = (() => {
   function _workLogCoreFields(log, cols) {
     const dept = getDepartmentByKey(log.departmentKey);
     const pick = (...names) => FieldNames.pickExact(cols, ...names);
+    const colByName = {};
+    (cols || []).forEach(c => { colByName[c.InternalName || c.name] = c; });
     const body = {};
     const blocked = new Set([
       "LinkTitle", "LinkTitleNoMenu", "LinkFilename", "LinkFilenameNoMenu",
@@ -2658,6 +2716,10 @@ const Store = (() => {
     ]);
     const set = (internalName, value) => {
       if (!internalName || blocked.has(internalName)) return;
+      if (FieldNames.isWriteUnsafe(colByName[internalName])) {
+        console.warn(`Work log core field skipped (write-unsafe column): ${internalName}`);
+        return;
+      }
       if (value !== undefined && value !== null && value !== "") body[internalName] = value;
     };
 
@@ -2679,14 +2741,27 @@ const Store = (() => {
   function _workLogTaskFields(log, cols) {
     const dept = getDepartmentByKey(log.departmentKey);
     const pick = (...names) => FieldNames.pickExact(cols, ...names);
+    const colByName = {};
+    (cols || []).forEach(c => { colByName[c.InternalName || c.name] = c; });
     const body = {};
     const set = (internalName, value) => {
-      if (internalName && value !== undefined && value !== null && value !== "") body[internalName] = value;
+      if (!internalName) return;
+      if (FieldNames.isWriteUnsafe(colByName[internalName])) {
+        console.warn(`Work log task field skipped (write-unsafe column): ${internalName}`);
+        return;
+      }
+      if (value !== undefined && value !== null && value !== "") body[internalName] = value;
     };
     if (dept) {
       dept.fields.forEach(field => {
-        const internal = pick(field.column, field.label, field.id)
-          || FieldNames.pick(cols, field.column, field.label, field.id);
+        // Exact match only for writes — pick()'s fuzzy fallback is for best-effort
+        // reads, not something we want to risk writing through. If a field has no
+        // exact column match, skip it and log clearly rather than guess.
+        const internal = pick(field.column, field.label, field.id);
+        if (!internal) {
+          console.warn(`Work log task field has no matching SharePoint column, skipped: ${field.label || field.id}`);
+          return;
+        }
         const value = log.fields ? log.fields[field.id] : undefined;
         set(internal, value);
       });
@@ -2696,13 +2771,16 @@ const Store = (() => {
   }
 
   async function _patchFieldsIndividually(listName, itemId, fields, label) {
+    const failures = [];
     for (const [key, value] of Object.entries(fields)) {
       try {
         await GraphAPI.updateItem(listName, itemId, { [key]: value });
       } catch (err) {
         console.warn(`${label} field skipped: ${key}`, err.message);
+        failures.push({ field: key, message: err.message });
       }
     }
+    return failures;
   }
 
   async function resetToSeed() {
@@ -2859,19 +2937,28 @@ const Store = (() => {
     const cols = await _workLogColumns();
     const coreFields = _workLogCoreFields(log, cols);
     const taskFields = _workLogTaskFields(log, cols);
+    let fieldFailures = [];
     if (existing && existing.spId) {
-      await _patchFieldsIndividually(SP_CONFIG.WORKLOG_LIST_NAME, existing.spId, coreFields, "Work log core");
-      await _patchFieldsIndividually(SP_CONFIG.WORKLOG_LIST_NAME, existing.spId, taskFields, "Work log task");
+      fieldFailures = fieldFailures.concat(await _patchFieldsIndividually(SP_CONFIG.WORKLOG_LIST_NAME, existing.spId, coreFields, "Work log core"));
+      fieldFailures = fieldFailures.concat(await _patchFieldsIndividually(SP_CONFIG.WORKLOG_LIST_NAME, existing.spId, taskFields, "Work log task"));
     } else {
       const title = coreFields.Title || `${log.employeeId || "EMP"}-${log.date || Utils.todayISO()}`;
       const created = await GraphAPI.createItem(SP_CONFIG.WORKLOG_LIST_NAME, { Title: title });
       const spId = created._graphId || created.ID;
       delete coreFields.Title;
-      await _patchFieldsIndividually(SP_CONFIG.WORKLOG_LIST_NAME, spId, coreFields, "Work log core");
-      await _patchFieldsIndividually(SP_CONFIG.WORKLOG_LIST_NAME, spId, taskFields, "Work log task");
+      fieldFailures = fieldFailures.concat(await _patchFieldsIndividually(SP_CONFIG.WORKLOG_LIST_NAME, spId, coreFields, "Work log core"));
+      fieldFailures = fieldFailures.concat(await _patchFieldsIndividually(SP_CONFIG.WORKLOG_LIST_NAME, spId, taskFields, "Work log task"));
     }
     await _loadWorkLogsFromGraph();
     SPConnection.setStatus("live");
+    if (fieldFailures.length) {
+      // The work log itself saved — only specific fields were rejected by
+      // SharePoint (e.g. a column type Graph can't write a plain value to).
+      // Surface this instead of failing silently, but don't throw: the rest
+      // of the log is safely saved and re-throwing would be misleading.
+      console.warn("Work log saved with field-level issues:", fieldFailures);
+      log._saveWarnings = fieldFailures;
+    }
     return log;
   }
 
@@ -4081,8 +4168,12 @@ const LogWorkView = (() => {
     };
 
     try {
-      await Store.saveWorkLog(log);
+      const saved = await Store.saveWorkLog(log);
       Toast.success(editingLogId ? "Work log updated in SharePoint." : "Work log submitted to SharePoint.");
+      if (saved && saved._saveWarnings && saved._saveWarnings.length) {
+        const n = saved._saveWarnings.length;
+        Toast.info(`Note: ${n} field${n > 1 ? "s" : ""} could not be saved to SharePoint (column may be read-only or unsupported). Everything else saved.`);
+      }
       App.navigate(isManagerEntry ? "manager-dashboard" : "dashboard");
     } catch (err) {
       Toast.error("Save failed: " + err.message);
