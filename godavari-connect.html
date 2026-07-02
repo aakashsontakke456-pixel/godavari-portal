@@ -589,6 +589,7 @@
       <h2>Chats</h2>
       <input class="search" placeholder="Search groups, branches, people" id="searchBox" oninput="renderGroupList()">
       <div id="newGroupBtnWrap"></div>
+      <div id="genPositionGroupsBtnWrap"></div>
     </div>
     <div class="pinned-wrap" style="position:relative;">
       <div id="pinnedPositionRow"></div>
@@ -885,7 +886,13 @@ function branchGroupId(b){ return 'g_branch_'+b.id; }
 function slugify(s){ return (s||'branch').toString().toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_+|_+$/g,'') || 'branch'; }
 function buildBranchGroups(){
   const hoReps = USERS.filter(u=>u.role==='Higher Authority').map(u=>u.id);
-  return BRANCHES.map(b=>({
+  // A branch whose Position Group has already been generated (via the
+  // "Generate Position Groups" button) has a real row in customGroups —
+  // that persisted version is used instead, so it shows normally in the
+  // sidebar and can be renamed/deleted like any other group. Branches
+  // without one yet still get this in-memory, hidden-from-sidebar fallback
+  // so daily position submission keeps working either way.
+  return BRANCHES.filter(b=>!customGroups.find(c=>c.id===branchGroupId(b))).map(b=>({
     id: branchGroupId(b),
     name: b.name+' – Position Group',
     type: 'branch',
@@ -1190,6 +1197,13 @@ function renderGroupList(){
   const q = document.getElementById('searchBox').value.toLowerCase();
   const list = document.getElementById('groupList');
   let groups = GROUPS.filter(g=>{
+    // Auto-generated per-branch Position Groups (Guntur, Karanja, etc.) are
+    // real chats — messages, daily positions, the "Open" button on the Bank
+    // Positions dashboard all still work — but they no longer clutter the
+    // sidebar itself. Only the always-on base groups and groups actually
+    // created via "+ New Group" (i.e. rows in the CustomGroups SharePoint
+    // list) are listed here.
+    if(g.branchId) return false;
     if(activeTab==='circular' && g.type!=='broadcast') return false;
     if(activeTab==='branch' && g.type!=='branch') return false;
     if(q && !g.name.toLowerCase().includes(q)) return false;
@@ -1999,6 +2013,68 @@ function openCreateGroup(){
   document.getElementById('createGroupModal').classList.add('show');
 }
 function closeCreateGroup(){ document.getElementById('createGroupModal').classList.remove('show'); }
+
+/* ============ GENERATE POSITION GROUPS (Higher Authority, one click) ============
+   Turns each branch's in-memory, hidden Position Group into a real row in the
+   CustomGroups SharePoint list, so it shows up in the sidebar like any other
+   group and can be renamed/deleted from Group Settings. Safe to click again
+   later — branches that already have a persisted Position Group are skipped,
+   so only branches added since the last click get a new one created. */
+function renderPositionGroupsButton(){
+  const wrap = document.getElementById('genPositionGroupsBtnWrap');
+  if(!wrap) return;
+  if(!isHigherAuthority(currentUserId) || !currentUserId){ wrap.innerHTML = ''; return; }
+  const missing = BRANCHES.filter(b=>!customGroups.find(c=>c.id===branchGroupId(b)));
+  if(missing.length===0 && BRANCHES.length>0){
+    wrap.innerHTML = `<div style="font-size:11px;color:var(--muted);text-align:center;margin-top:8px;">✅ Every branch already has a Position Group</div>`;
+    return;
+  }
+  if(BRANCHES.length===0){ wrap.innerHTML=''; return; }
+  wrap.innerHTML = `<button class="new-approval-btn" style="margin-top:8px;" onclick="confirmGeneratePositionGroups()">🏢 Generate Position Groups (${missing.length} new)</button>`;
+}
+
+async function confirmGeneratePositionGroups(){
+  const missing = BRANCHES.filter(b=>!customGroups.find(c=>c.id===branchGroupId(b)));
+  if(missing.length===0){ alert('Every branch already has a Position Group.'); return; }
+  const names = missing.map(b=>b.name).join(', ');
+  if(!confirm(`Create a Position Group for ${missing.length} branch${missing.length>1?'es':''}?\n\n${names}\n\nEach one will be saved to SharePoint and appear in everyone's chat list.`)) return;
+  await generatePositionGroups(missing);
+}
+
+async function generatePositionGroups(missing){
+  const hoReps = USERS.filter(u=>u.role==='Higher Authority').map(u=>u.id);
+  let createdCount = 0, failedCount = 0;
+  for(const b of missing){
+    const gid = branchGroupId(b);
+    // Belt-and-braces: skip if it appeared since this run started (e.g. two
+    // Higher Authority users clicking the button around the same time).
+    if(customGroups.find(c=>c.id===gid)) continue;
+    const memberIds = [...new Set([...hoReps, b.managerId, ...b.staffIds].filter(Boolean))];
+    try{
+      const res = await createListItemIconSafe(APP_CONFIG.customGroupsListId, {
+        Title: gid, Name: b.name+' – Position Group', CG_Type: 'branch', Icon: '🏢',
+        MemberIds: JSON.stringify(memberIds), CreatedBy: currentUserId
+      });
+      customGroups.push({
+        id: gid, name: b.name+' – Position Group', type: 'branch', postRestricted:false,
+        icon: res.iconSaved ? '🏢' : '', sub: 'Branch position group', memberIds, __itemId: res.item.id
+      });
+      messages[gid] = messages[gid] || [];
+      createdCount++;
+    }catch(e){
+      console.error('Could not create Position Group for '+b.name, e);
+      failedCount++;
+    }
+  }
+  rebuildBranchesAndGroups();
+  renderAll();
+  if(failedCount===0){
+    alert(`Created ${createdCount} Position Group${createdCount===1?'':'s'} — they\u2019re now saved to SharePoint and visible in the chat list.`);
+  } else {
+    alert(`Created ${createdCount} Position Group${createdCount===1?'':'s'}, but ${failedCount} failed — check your connection and click the button again to retry the rest.`);
+  }
+}
+
 let ngSelected = new Set();
 function renderNewGroupMemberList(){
   const q = document.getElementById('ngMemberSearch').value.toLowerCase();
@@ -2623,6 +2699,7 @@ async function renderAll(){
   renderCurrentUserChip();
   renderMeetingButton();
   renderNewGroupButton();
+  renderPositionGroupsButton();
   renderGroupList();
   renderChat();
   renderRightPanel();
