@@ -5,10 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Godavari Connect</title>
 <!-- MSAL.js — handles the "Sign in with Microsoft" step against your Azure AD app.
-     NOTE: this only works once the page is hosted on a real domain that is registered
-     as a Redirect URI on the Godavari Internal App registration. It will NOT complete
-     a real sign-in inside this preview sandbox — use "Continue in Demo Mode" here to
-     test the rest of the app, and test the real login after you deploy. -->
+     Requires this page's exact deployed URL to be registered as a Redirect URI
+     (SPA platform) on the Godavari Internal App registration. -->
 <script src="https://alcdn.msauth.net/browser/3.14.0/js/msal-browser.min.js"></script>
 <style>
   :root{
@@ -472,7 +470,6 @@
   .btn-ms:hover{background:#f7f5ee;}
   .btn-ms img{width:18px;height:18px;}
   .auth-note{font-size:11px;color:var(--muted);margin-top:16px;line-height:1.5;}
-  .auth-demo-link{display:block;margin-top:14px;font-size:12px;color:var(--teal-mid);cursor:pointer;text-decoration:underline;}
   .auth-error{background:#fbeae6;color:var(--danger);border:1px solid #edc7bd;border-radius:8px;
     padding:9px 10px;font-size:12px;margin-bottom:14px;text-align:left;display:none;}
   .whoami-branch{font-size:12.5px;color:var(--muted);margin-bottom:16px;}
@@ -510,7 +507,6 @@
       Sign in with Microsoft
     </button>
     <div class="auth-note">Use your branch's Microsoft 365 login. If your branch shares one login between staff, you'll pick your own name next.</div>
-    <div class="auth-demo-link" onclick="enterDemoMode()">Continue in Demo Mode (preview only)</div>
   </div>
 </div>
 
@@ -740,7 +736,8 @@ const APP_CONFIG = {
 /* ============ DATA MODEL ============ */
 /* USERS is now populated at sign-in time from the EmployeeDirectory SharePoint list
    (see fetchEmployeeDirectory / mapDirectoryRowToUser below), instead of being
-   hardcoded. The three seed rows below are only used by "Continue in Demo Mode". */
+   hardcoded. The seed rows below are unused now that Demo Mode has been removed —
+   safe to delete once you're fully on real sign-in, kept here as a fallback reference. */
 let USERS = [
   {id:'u_md', name:'R. Subramaniam', role:'Higher Authority', title:'Managing Director', avatar:'RS', upn:'r.subramaniam@godavariurban.onmicrosoft.com'},
   {id:'u_hr', name:'HR – Head Office', role:'Higher Authority', title:'HR Department', avatar:'HR', upn:'hr@godavariurban.onmicrosoft.com'},
@@ -1703,7 +1700,7 @@ async function signInWithMicrosoft(){
     await identifyEmployeeByUPN(upn);
   }catch(err){
     console.error(err);
-    showAuthError('authError','Sign-in failed. If this page is not yet deployed to your organization domain with a registered Redirect URI, real Microsoft sign-in cannot complete here — use Demo Mode to preview the app instead.');
+    showAuthError('authError','Sign-in failed. Check that this page\u2019s exact URL is registered as a Redirect URI (SPA) on the Godavari Internal App, then try again.');
   }
 }
 
@@ -1827,16 +1824,6 @@ function finishLogin(row){
   renderAll();
 }
 
-/* Preview-only shortcut, since real MSAL popups can't complete inside a sandboxed
-   preview without a registered redirect URI. Uses the existing hardcoded USERS list
-   exactly like the original prototype did. Remove once deployed for real. */
-function enterDemoMode(){
-  document.getElementById('authStep1').style.display = 'none';
-  document.getElementById('mainTopbar').style.display = 'flex';
-  document.getElementById('mainApp').style.display = 'flex';
-  renderAll();
-}
-
 /* ============ INIT ============ */
 async function renderAll(){
   populateRoleSelect();
@@ -1849,7 +1836,7 @@ async function renderAll(){
   await loadData();
   setMobilePane('chats');
   // App stays hidden behind the login screen (see authStep1 overlay) until
-  // signInWithMicrosoft()/enterDemoMode() calls renderAll() itself.
+  // signInWithMicrosoft() completes and calls renderAll() itself.
 })();
 </script>
 </body>
