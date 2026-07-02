@@ -780,6 +780,10 @@ const APP_CONFIG = {
   siteId:     'godavariurban.sharepoint.com,c6314fd2-a7f8-41d4-8179-a5b200012b40,aeed8012-39bc-483a-9bfd-1e63be1af068', // Godavari-App-Data site
   employeeListId: 'ef2e009c-cab1-47fe-8553-23f7fc791252', // EmployeeDirectory list
   branchMappingListId: 'edcef08f-ff52-4845-97de-87ce690c0dcb', // BranchGroupMapping list
+  messagesListId: '1a1c1435-aab3-47ad-9c75-b4c792e7e619', // Messages list
+  approvalsListId: '4f34d28e-09af-4203-916b-4d9447a5fbd4', // Approvals list
+  positionsListId: '2ab0511e-dfd1-45a5-97a6-43b22d3f6f6e', // Positions list
+  customGroupsListId: '0c5dee45-6a9e-432e-a79b-d375df998e49', // CustomGroups list
 };
 
 /* ============ DATA MODEL ============ */
@@ -868,31 +872,84 @@ let lastSeen = {};   // lastSeen[uid][groupId] = timestamp -> WhatsApp-style unr
 let passwordResetRequests = []; // {id, employeeId, name, branch, time} — raised via "Forgot password?"
 function nowMinus(mins){ return Date.now() - mins*60000; }
 
+/* Pulls Messages, Approvals (incl. password-reset requests), Positions, and
+   CustomGroups from their real SharePoint lists and rebuilds in-memory state.
+   Called at login and can be re-called any time to pick up what other
+   people have posted (multi-user chat needs this, unlike single-device
+   window.storage which never worked outside this chat preview anyway).
+   Note: message reactions and per-user read receipts (lastSeen) have no
+   backing list yet and stay session-only for now — everything else here
+   is a real row in SharePoint. */
 async function loadData(){
+  messages = {}; approvals = []; positions = []; customGroups = [];
+  passwordResetRequests = []; reactions = {}; lastSeen = {}; savedGroupMembers = {};
   try{
-    const r = await window.storage.get('gc_state', true);
-    const parsed = JSON.parse(r.value);
-    messages = parsed.messages || {};
-    approvals = parsed.approvals || [];
-    reactions = parsed.reactions || {};
-    positions = parsed.positions || [];
-    customGroups = parsed.customGroups || [];
-    lastSeen = parsed.lastSeen || {};
-    passwordResetRequests = parsed.passwordResetRequests || [];
-    savedGroupMembers = parsed.groupMembers || {};
+    const [msgRows, apRows, posRows, groupRows] = await Promise.all([
+      fetchAllListItems(APP_CONFIG.messagesListId, 'GroupId,SenderId,SenderName,Body,SentOn'),
+      fetchAllListItems(APP_CONFIG.approvalsListId, 'Title,GroupId,RequesterId,A_Type,Details,Status,SubmittedOn'),
+      fetchAllListItems(APP_CONFIG.positionsListId, 'BranchId,SubmittedBy,Data,SubmittedOn'),
+      fetchAllListItems(APP_CONFIG.customGroupsListId, 'Title,Name,CG_Type,MemberIds,CreatedBy'),
+    ]);
+
+    msgRows.forEach(r=>{
+      let payload = {}; try{ payload = JSON.parse(r.Body||'{}'); }catch(e){}
+      const gid = r.GroupId;
+      messages[gid] = messages[gid] || [];
+      messages[gid].push({
+        id: 'm_'+r.__itemId, uid: r.SenderId, time: Date.parse(r.SentOn)||Date.now(),
+        text: payload.text||'', type: payload.type||'normal',
+        attachment: payload.attachment, position: payload.position,
+        __itemId: r.__itemId
+      });
+    });
+    Object.keys(messages).forEach(gid=>messages[gid].sort((a,b)=>a.time-b.time));
+
+    apRows.forEach(r=>{
+      let extra = {}; try{ extra = JSON.parse(r.Details||'{}'); }catch(e){}
+      if(r.A_Type === 'PasswordReset'){
+        if((r.Status||'').toLowerCase() === 'pending'){
+          passwordResetRequests.push({
+            id: 'pwr_'+r.__itemId, employeeId: r.RequesterId, itemId: extra.employeeItemId,
+            name: r.Title, branch: extra.branch, time: Date.parse(r.SubmittedOn)||Date.now(),
+            __approvalItemId: r.__itemId
+          });
+        }
+        return;
+      }
+      approvals.push({
+        id: 'ap_'+r.__itemId, type: r.A_Type, title: r.Title, amount: extra.amount||'',
+        branch: extra.branch||'—', details: extra.details||'', requestedBy: r.RequesterId,
+        status: (r.Status||'pending').toLowerCase(), time: Date.parse(r.SubmittedOn)||Date.now(),
+        approvedBy: extra.approvedBy, decidedAt: extra.decidedAt, __itemId: r.__itemId
+      });
+    });
+
+    posRows.forEach(r=>{
+      let vals = {}; try{ vals = JSON.parse(r.Data||'{}'); }catch(e){}
+      positions.push({
+        id: 'pos_'+r.__itemId, branchId: r.BranchId, uid: r.SubmittedBy,
+        time: Date.parse(r.SubmittedOn)||Date.now(), __itemId: r.__itemId, ...vals
+      });
+    });
+
+    customGroups = groupRows.map(r=>{
+      let memberIds = []; try{ memberIds = JSON.parse(r.MemberIds||'[]'); }catch(e){}
+      return {
+        id: r.Title, name: r.Name, type: r.CG_Type, postRestricted:false,
+        sub: 'Custom group', memberIds, __itemId: r.__itemId
+      };
+    });
+    customGroups.forEach(g=>{ messages[g.id] = messages[g.id] || []; });
   }catch(e){
-    messages = {}; approvals = []; reactions = {}; positions = [];
-    customGroups = []; lastSeen = {}; passwordResetRequests = []; savedGroupMembers = {};
+    console.error('loadData failed', e);
   }
   ensureLastSeenInit();
 }
-async function saveData(){
-  try{
-    const groupMembers = {};
-    GROUPS.forEach(g=>{ groupMembers[g.id] = g.memberIds; });
-    await window.storage.set('gc_state', JSON.stringify({messages, approvals, reactions, positions, customGroups, groupMembers, lastSeen, passwordResetRequests}), true);
-  }catch(e){ console.error('save failed', e); }
-}
+/* No more single shared-blob save — every action (sendMessage, submitApproval,
+   recordPosition, submitCreateGroup, etc.) now writes its own SharePoint row
+   directly via createListItem/patchListItemFields at the moment it happens.
+   This stays as a no-op so any leftover saveData() calls elsewhere don't error. */
+async function saveData(){}
 
 /* ============ HELPERS ============ */
 function getUser(uid){ return USERS.find(u=>u.id===uid); }
@@ -1249,19 +1306,51 @@ function cancelAttachPreview(){
   document.getElementById('attachPreviewOverlay').classList.remove('show');
 }
 
-function sendPendingAttachment(){
+/* Writes one message as its own row in the Messages list (GroupId/SenderId/
+   SenderName/SentOn as real filterable columns, everything else — text,
+   type, attachment, position — packed as JSON into Body). Shared by
+   sendMessage, sendPendingAttachment, recordPosition, and postMeetingMessage
+   so there's exactly one place that talks to the Messages list. */
+async function postMessageToGroup(gid, payload){
+  const nowIso = new Date().toISOString();
+  const user = getUser(currentUserId);
+  let body = JSON.stringify(payload);
+  if(body.length > 60000){
+    // SharePoint's "Multiple lines of text" column caps well below this —
+    // drop heavy fields (e.g. embedded attachment data) and keep metadata only.
+    const trimmed = Object.assign({}, payload);
+    if(trimmed.attachment){
+      trimmed.attachment = { name: trimmed.attachment.name, size: trimmed.attachment.size, type: trimmed.attachment.type, tooLargeToStore: true };
+    }
+    body = JSON.stringify(trimmed);
+  }
+  const created = await createListItem(APP_CONFIG.messagesListId, {
+    GroupId: gid, SenderId: currentUserId, SenderName: user ? user.name : currentUserId, Body: body, SentOn: nowIso
+  });
+  const msg = {
+    id: 'm_'+created.id, uid: currentUserId, time: Date.parse(nowIso),
+    text: payload.text||'', type: payload.type||'normal',
+    attachment: payload.attachment, position: payload.position, __itemId: created.id
+  };
+  messages[gid] = messages[gid] || [];
+  messages[gid].push(msg);
+  return msg;
+}
+
+async function sendPendingAttachment(){
   if(!pendingAttachment) return;
   const g = GROUPS.find(x=>x.id===activeGroupId);
   const caption = document.getElementById('apoCaption').value.trim();
-  const id = 'm_'+Date.now();
-  messages[g.id] = messages[g.id] || [];
-  messages[g.id].push({
-    id, uid: currentUserId, type:'attachment', time: Date.now(),
-    text: caption, attachment: pendingAttachment
-  });
+  const attachment = pendingAttachment;
   pendingAttachment = null;
   document.getElementById('attachPreviewOverlay').classList.remove('show');
-  saveData();
+  try{
+    await postMessageToGroup(g.id, { text: caption, type:'attachment', attachment });
+  }catch(e){
+    console.error(e);
+    alert('Couldn\u2019t send the attachment — check your connection and try again.');
+    return;
+  }
   renderChat();
   renderGroupList();
 }
@@ -1271,20 +1360,23 @@ function fmtSize(bytes){
   return (bytes/1024/1024).toFixed(1)+' MB';
 }
 
-function sendMessage(){
+async function sendMessage(){
   const input = document.getElementById('msgInput');
   const text = input.value.trim();
   if(!text) return;
   const g = GROUPS.find(x=>x.id===activeGroupId);
   const type = (g.postRestricted && isHigherAuthority(currentUserId)) ? 'circular' : 'normal';
-  const id = 'm_'+Date.now();
-  messages[g.id] = messages[g.id] || [];
-  messages[g.id].push({id, uid: currentUserId, text, type, time: Date.now()});
   input.value='';
   /* No separate notification push needed — every other member of this group
      will simply see an unread badge light up on this exact group next time
      they open the app or switch roles, just like WhatsApp. */
-  saveData();
+  try{
+    await postMessageToGroup(g.id, { text, type });
+  }catch(e){
+    console.error(e);
+    alert('Couldn\u2019t send the message — check your connection and try again.');
+    return;
+  }
   renderChat();
   renderGroupList();
 }
@@ -1359,8 +1451,9 @@ function renderRightPanel(){
   body.innerHTML = html;
 }
 
-function decideApproval(id, status){
+async function decideApproval(id, status){
   const ap = approvals.find(a=>a.id===id);
+  const prevStatus = ap.status;
   ap.status = status;
   ap.approvedBy = currentUserId;
   ap.decidedAt = Date.now();
@@ -1368,34 +1461,49 @@ function decideApproval(id, status){
      blinking "pending action" badge on Approvals & Requests simply stops
      for whoever's scope it was in (this manager will see the new status
      the moment they open that panel). */
-  saveData();
+  try{
+    await patchListItemFields(APP_CONFIG.approvalsListId, ap.__itemId, {
+      Status: status,
+      Details: JSON.stringify({ amount: ap.amount, branch: ap.branch, details: ap.details, approvedBy: currentUserId, decidedAt: new Date(ap.decidedAt).toISOString() })
+    });
+  }catch(e){
+    console.error(e);
+    ap.status = prevStatus; // roll back the local change since the write failed
+    alert('Couldn\u2019t save that decision to SharePoint — check your connection and try again.');
+  }
   renderRightPanel();
 }
 
 function openModal(){ document.getElementById('approvalModal').classList.add('show'); }
 function closeModal(){ document.getElementById('approvalModal').classList.remove('show'); }
-function submitApproval(){
+async function submitApproval(){
   const title = document.getElementById('apTitle').value.trim();
   if(!title){ alert('Please enter a title/subject.'); return; }
-  const ap = {
-    id:'ap_'+Date.now(),
-    type: document.getElementById('apType').value,
-    title,
-    amount: document.getElementById('apAmount').value.trim(),
-    branch: document.getElementById('apBranch').value.trim() || '—',
-    details: document.getElementById('apDetails').value.trim(),
-    requestedBy: currentUserId,
-    status: 'pending',
-    time: Date.now()
-  };
-  approvals.push(ap);
+  const type = document.getElementById('apType').value;
+  const amount = document.getElementById('apAmount').value.trim();
+  const branch = document.getElementById('apBranch').value.trim() || '—';
+  const details = document.getElementById('apDetails').value.trim();
+  const nowIso = new Date().toISOString();
+  try{
+    const created = await createListItem(APP_CONFIG.approvalsListId, {
+      Title: title, GroupId: '', RequesterId: currentUserId, A_Type: type,
+      Details: JSON.stringify({ amount, branch, details }), Status: 'pending', SubmittedOn: nowIso
+    });
+    approvals.push({
+      id: 'ap_'+created.id, type, title, amount, branch, details,
+      requestedBy: currentUserId, status: 'pending', time: Date.parse(nowIso), __itemId: created.id
+    });
+  }catch(e){
+    console.error(e);
+    alert('Couldn\u2019t submit the request — check your connection and try again.');
+    return;
+  }
   ['apTitle','apAmount','apBranch','apDetails'].forEach(id=>document.getElementById(id).value='');
   closeModal();
   /* No manual push needed — the Approvals & Requests card will start
      blinking for Higher Authority/HR users the moment they view it, purely
      because a 'pending' item now exists in their scope. Employees never
      get this card at all, so the escalation stays invisible to them. */
-  saveData();
   renderRightPanel();
 }
 
@@ -1485,28 +1593,42 @@ function renderMembersModal(){
   }
 }
 
-function addMember(gid){
+async function addMember(gid){
   const sel = document.getElementById('addMemberSelect');
   if(!sel || !sel.value) return;
   const g = GROUPS.find(x=>x.id===gid);
   if(!g.memberIds.includes(sel.value)) g.memberIds.push(sel.value);
-  saveData();
+  await persistCustomGroupMembers(g);
   renderMembersModal();
   renderGroupList();
   if(gid===activeGroupId) renderChat();
 }
 
-function removeMember(gid, uid){
+async function removeMember(gid, uid){
   const g = GROUPS.find(x=>x.id===gid);
   if(isHigherAuthority(uid) && g.memberIds.filter(isHigherAuthority).length<=1){
     alert('Cannot remove the last Higher Authority member from this group.');
     return;
   }
   g.memberIds = g.memberIds.filter(id=>id!==uid);
-  saveData();
+  await persistCustomGroupMembers(g);
   renderMembersModal();
   renderGroupList();
   if(gid===activeGroupId) renderChat();
+}
+/* Base groups (All Employees, Celebrations, Branch Managers, per-branch Position
+   Groups) are always recomputed from EmployeeDirectory, so their membership isn't
+   stored anywhere — only manually-created custom groups need a write here. */
+async function persistCustomGroupMembers(g){
+  const cg = customGroups.find(c=>c.id===g.id);
+  if(!cg || !cg.__itemId) return;
+  try{
+    await patchListItemFields(APP_CONFIG.customGroupsListId, cg.__itemId, { MemberIds: JSON.stringify(g.memberIds) });
+    cg.memberIds = g.memberIds;
+  }catch(e){
+    console.error(e);
+    alert('Couldn\u2019t save the member change to SharePoint — check your connection and try again.');
+  }
 }
 
 /* ============ DAILY POSITION TEMPLATE (quick-send from chat) ============ */
@@ -1589,7 +1711,7 @@ function toggleNgMember(uid, checked){
   if(checked) ngSelected.add(uid); else ngSelected.delete(uid);
   document.getElementById('ngSelectedCount').textContent = ngSelected.size+' selected';
 }
-function submitCreateGroup(){
+async function submitCreateGroup(){
   const name = document.getElementById('ngName').value.trim();
   if(!name){ alert('Please enter a group name.'); return; }
   if(ngSelected.size===0){ alert('Add at least one member.'); return; }
@@ -1602,11 +1724,21 @@ function submitCreateGroup(){
     sub: 'Created by '+getUser(currentUserId).name,
     memberIds: [...ngSelected]
   };
+  try{
+    const created = await createListItem(APP_CONFIG.customGroupsListId, {
+      Title: g.id, Name: g.name, CG_Type: g.type,
+      MemberIds: JSON.stringify(g.memberIds), CreatedBy: currentUserId
+    });
+    g.__itemId = created.id;
+  }catch(e){
+    console.error(e);
+    alert('Couldn\u2019t create the group in SharePoint — check your connection and try again.');
+    return;
+  }
   GROUPS.push(g);
   customGroups.push(g);
   messages[g.id] = [];
   closeCreateGroup();
-  saveData();
   renderGroupList();
   openGroup(g.id);
 }
@@ -1678,25 +1810,32 @@ function renderPositionsDashboard(){
    both the branch chat's 📊 quick template and the Bank Positions dashboard,
    so the two can never fall out of sync. Updates today's entry in place if one
    already exists (no delete-then-hope-they-resubmit); otherwise creates a new one. */
-function recordPosition(branchId, vals){
+async function recordPosition(branchId, vals){
   const b = BRANCHES.find(x=>x.id===branchId);
   const gid = branchGroupId(b);
   const existing = todaysPositionFor(branchId);
   const wasUpdate = !!existing;
+  const nowIso = new Date().toISOString();
 
-  if(existing){
-    Object.assign(existing, vals, {uid: currentUserId, time: Date.now()});
-  } else {
-    positions.push({id:'pos_'+Date.now(), branchId, uid: currentUserId, ...vals, time: Date.now()});
+  try{
+    if(existing){
+      await patchListItemFields(APP_CONFIG.positionsListId, existing.__itemId, {
+        SubmittedBy: currentUserId, Data: JSON.stringify(vals), SubmittedOn: nowIso
+      });
+      Object.assign(existing, vals, { uid: currentUserId, time: Date.parse(nowIso) });
+    } else {
+      const created = await createListItem(APP_CONFIG.positionsListId, {
+        BranchId: branchId, SubmittedBy: currentUserId, Data: JSON.stringify(vals), SubmittedOn: nowIso
+      });
+      positions.push({ id:'pos_'+created.id, branchId, uid: currentUserId, ...vals, time: Date.parse(nowIso), __itemId: created.id });
+    }
+    await postMessageToGroup(gid, { type:'position', position: { branchName: b.name, updated: wasUpdate, ...vals } });
+  }catch(e){
+    console.error(e);
+    alert('Couldn\u2019t save today\u2019s position to SharePoint — check your connection and try again.');
+    return;
   }
 
-  messages[gid] = messages[gid] || [];
-  messages[gid].push({
-    id:'m_'+Date.now(), uid: currentUserId, type:'position', time: Date.now(),
-    position: { branchName: b.name, updated: wasUpdate, ...vals }
-  });
-
-  saveData();
   if(activeGroupId===gid) renderChat();
   renderGroupList();
   const overlay = document.getElementById('positionsOverlay');
@@ -1800,8 +1939,42 @@ async function fetchEmployeeDirectory(upn){
 /* PATCHes PasswordHash/UpdatedOn (or any EmployeeDirectory field) on one item by its
    SharePoint list-item id. Same Sites.ReadWrite.All permission already used for reads. */
 async function patchEmployeeFields(itemId, fieldsObj){
+  return patchListItemFields(APP_CONFIG.employeeListId, itemId, fieldsObj);
+}
+
+/* ============ GENERIC SHAREPOINT LIST HELPERS ============
+   Reused by Messages / Approvals / Positions / CustomGroups so each group chat
+   message, approval, position, or group is its own real row — not one shared
+   JSON blob — which is what actually holds up at 1000-employee scale without
+   two people's saves silently overwriting each other. */
+async function fetchAllListItems(listId, selectFields){
   const token = await getGraphToken();
-  const url = `https://graph.microsoft.com/v1.0/sites/${APP_CONFIG.siteId}/lists/${APP_CONFIG.employeeListId}/items/${itemId}/fields`;
+  let url = `https://graph.microsoft.com/v1.0/sites/${APP_CONFIG.siteId}/lists/${listId}/items`
+    + `?$expand=fields($select=${selectFields})&$top=200`;
+  let rows = [];
+  while(url){
+    const resp = await fetch(url, { headers: { Authorization: 'Bearer ' + token } });
+    if(!resp.ok) throw new Error('Graph request failed: ' + resp.status);
+    const data = await resp.json();
+    rows = rows.concat((data.value || []).map(item => Object.assign({}, item.fields, { __itemId: item.id })));
+    url = data['@odata.nextLink'] || null;
+  }
+  return rows;
+}
+async function createListItem(listId, fieldsObj){
+  const token = await getGraphToken();
+  const url = `https://graph.microsoft.com/v1.0/sites/${APP_CONFIG.siteId}/lists/${listId}/items`;
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fields: fieldsObj })
+  });
+  if(!resp.ok) throw new Error('Graph create failed: ' + resp.status);
+  return resp.json(); // includes .id — the new SharePoint list-item id
+}
+async function patchListItemFields(listId, itemId, fieldsObj){
+  const token = await getGraphToken();
+  const url = `https://graph.microsoft.com/v1.0/sites/${APP_CONFIG.siteId}/lists/${listId}/items/${itemId}/fields`;
   const resp = await fetch(url, {
     method: 'PATCH',
     headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
@@ -1919,7 +2092,7 @@ async function confirmIdentity(){
     if(!pw){ showAuthError('whoamiError','Enter your password.'); return; }
     const ok = await verifyStoredPassword(pendingRow, pw);
     if(!ok){ showAuthError('whoamiError','Incorrect password. Tap "Forgot password?" if you need it reset.'); return; }
-    finishLogin(pendingRow);
+    await finishLogin(pendingRow);
     return;
   }
   if(authStage === 'setpassword'){
@@ -1928,7 +2101,7 @@ async function confirmIdentity(){
     if(pw.length < 4){ showAuthError('whoamiError','Password must be at least 4 characters.'); return; }
     if(pw !== pw2){ showAuthError('whoamiError','Passwords don\u2019t match.'); return; }
     await setStoredPassword(pendingRow, pw);
-    finishLogin(pendingRow);
+    await finishLogin(pendingRow);
     return;
   }
 }
@@ -1965,18 +2138,30 @@ async function setStoredPassword(row, pw){
 /* ============ FORGOT PASSWORD ============ */
 async function requestPasswordReset(){
   if(!pendingRow) return;
-  passwordResetRequests = passwordResetRequests.filter(r=>r.employeeId!==pendingRow.EmployeeID);
-  passwordResetRequests.push({
-    id:'pwr_'+Date.now(), employeeId: pendingRow.EmployeeID, itemId: pendingRow.__itemId,
-    name: pendingRow.FullName, branch: pendingRow.Branch, time: Date.now()
-  });
-  await saveData();
+  const nowIso = new Date().toISOString();
+  try{
+    const created = await createListItem(APP_CONFIG.approvalsListId, {
+      Title: pendingRow.FullName, GroupId: '', RequesterId: pendingRow.EmployeeID, A_Type: 'PasswordReset',
+      Details: JSON.stringify({ branch: pendingRow.Branch, employeeItemId: pendingRow.__itemId }),
+      Status: 'pending', SubmittedOn: nowIso
+    });
+    passwordResetRequests = passwordResetRequests.filter(r=>r.employeeId!==pendingRow.EmployeeID);
+    passwordResetRequests.push({
+      id:'pwr_'+created.id, employeeId: pendingRow.EmployeeID, itemId: pendingRow.__itemId,
+      name: pendingRow.FullName, branch: pendingRow.Branch, time: Date.parse(nowIso), __approvalItemId: created.id
+    });
+  }catch(e){
+    console.error(e);
+    showAuthError('whoamiError','Couldn\u2019t send the reset request — check your connection and try again.');
+    return;
+  }
   document.getElementById('whoamiOkNote').style.display = 'block';
   document.getElementById('whoamiOkNote').textContent = 'Reset request sent to HR / Head Office. They\u2019ll clear your password so you can set a new one.';
   hideAuthError('whoamiError');
 }
 /* Higher Authority / HR action from the Approvals panel — clears the stored
-   hash so the employee is prompted to set a fresh password on next login. */
+   hash so the employee is prompted to set a fresh password on next login,
+   and marks the Approvals row as resolved so it stops showing as pending. */
 async function approvePasswordReset(reqId){
   const req = passwordResetRequests.find(r=>r.id===reqId);
   if(!req) return;
@@ -1993,19 +2178,21 @@ async function approvePasswordReset(reqId){
     }
     if(!itemId) throw new Error('Could not locate employee row in SharePoint');
     await patchEmployeeFields(itemId, { PasswordHash: '', UpdatedOn: new Date().toISOString() });
+    if(req.__approvalItemId){
+      await patchListItemFields(APP_CONFIG.approvalsListId, req.__approvalItemId, { Status: 'approved' });
+    }
   }catch(e){
     console.error(e);
     alert('Could not clear the password in SharePoint. Please try again.');
     return;
   }
   passwordResetRequests = passwordResetRequests.filter(r=>r.id!==reqId);
-  await saveData();
   renderRightPanel();
   alert(req.name+' can now set a new password next time they log in.');
 }
 
 /* ============ AUTH: finish — enter the app ============ */
-function finishLogin(row){
+async function finishLogin(row){
   const user = rowToUser(row);
   if(!USERS.find(u=>u.id===user.id)) USERS.push(user);
   currentUserId = user.id;
@@ -2015,6 +2202,11 @@ function finishLogin(row){
   document.getElementById('authLoading').style.display = 'none';
   document.getElementById('mainTopbar').style.display = 'flex';
   document.getElementById('mainApp').style.display = 'flex';
+  // Only now (post sign-in) do we have a Graph token, so this is where real
+  // chat/approvals/positions/groups get pulled from SharePoint — not at page
+  // load, when there's no signed-in account yet to fetch with.
+  await loadData();
+  rebuildBranchesAndGroups(); // re-run so any loaded CustomGroups slot into GROUPS correctly
   renderAll();
 }
 
@@ -2072,7 +2264,7 @@ async function submitMeeting(){
     });
     if(!resp.ok) throw new Error('Graph request failed: '+resp.status);
     const meeting = await resp.json();
-    postMeetingMessage(groupId, subject, start, meeting.joinWebUrl);
+    await postMeetingMessage(groupId, subject, start, meeting.joinWebUrl);
     closeMeetingModal();
     window.open(meeting.joinWebUrl, '_blank');
   }catch(err){
@@ -2081,15 +2273,18 @@ async function submitMeeting(){
     errEl.style.display = 'block';
   }
 }
-function postMeetingMessage(groupId, subject, start, joinUrl){
+async function postMeetingMessage(groupId, subject, start, joinUrl){
   const g = GROUPS.find(x=>x.id===groupId);
   if(!g) return;
-  messages[groupId] = messages[groupId] || [];
-  messages[groupId].push({
-    id:'m_'+Date.now(), uid: currentUserId, type:'circular', time: Date.now(),
-    text: `📅 Teams Meeting scheduled: "${subject}" on ${start.toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'})}.\nJoin: ${joinUrl}`
-  });
-  saveData();
+  try{
+    await postMessageToGroup(groupId, {
+      type:'circular',
+      text: `📅 Teams Meeting scheduled: "${subject}" on ${start.toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'})}.\nJoin: ${joinUrl}`
+    });
+  }catch(e){
+    console.error(e);
+    // Meeting itself was created successfully in Teams — just the chat notice failed to save.
+  }
   if(activeGroupId===groupId) renderChat();
   renderGroupList();
 }
@@ -2104,10 +2299,12 @@ async function renderAll(){
   renderRightPanel();
 }
 (async function init(){
-  await loadData();
   setMobilePane('chats');
+  // Messages/Approvals/Positions/CustomGroups load from SharePoint inside
+  // finishLogin() once the person is actually signed in and has a Graph
+  // token — there's nothing to fetch with before that.
   // App stays hidden behind the login screen (see authStep1 overlay) until
-  // signInWithMicrosoft() completes and calls renderAll() itself.
+  // signInWithMicrosoft() completes and calls finishLogin() itself.
 })();
 </script>
 </body>
