@@ -696,7 +696,7 @@
         <button class="btn-cancel" onclick="closeGroupSettings()">Cancel</button>
         <button class="btn-submit" onclick="saveGroupSettings()">Save Changes</button>
       </div>
-      <div class="modal-actions" style="margin-top:6px;">
+      <div class="modal-actions" id="gsDeleteWrap" style="margin-top:6px;">
         <button class="btn-danger" style="flex:1;padding:9px;border-radius:7px;border:none;font-weight:700;cursor:pointer;font-size:13px;" onclick="deleteGroupConfirm()">🗑️ Delete Group</button>
       </div>
     </div>
@@ -900,6 +900,9 @@ let GROUPS = [];
 function groupMemberCount(g){ return g.memberIds.length; }
 let customGroupCounter = 0;
 let savedGroupMembers = {}; // manual member-list overrides saved previously, re-applied after each rebuild
+let groupOverrides = {}; // id -> {name, icon, __itemId} — Higher Authority renames/icons for the
+                          // auto-generated base/branch groups, stored as rows in the CustomGroups
+                          // list (distinguished from real custom groups by Title not starting with 'g_custom_')
 
 /* Rebuilds BRANCHES and the base GROUPS from whatever is currently in USERS.
    Called right after the directory syncs (on login and on manual refresh) so
@@ -935,6 +938,11 @@ function rebuildBranchesAndGroups(){
   ];
   GROUPS = [...baseGroups, ...buildBranchGroups(), ...customGroups];
   GROUPS.forEach(g=>{ if(savedGroupMembers[g.id]) g.memberIds = savedGroupMembers[g.id]; });
+  Object.keys(groupOverrides).forEach(id=>{
+    const g = GROUPS.find(x=>x.id===id);
+    const o = groupOverrides[id];
+    if(g && o){ if(o.name) g.name = o.name; g.icon = o.icon || g.icon; }
+  });
   if(!GROUPS.find(g=>g.id===activeGroupId)) activeGroupId = 'g_all';
 }
 
@@ -959,7 +967,7 @@ function nowMinus(mins){ return Date.now() - mins*60000; }
    backing list yet and stay session-only for now — everything else here
    is a real row in SharePoint. */
 async function loadData(){
-  messages = {}; approvals = []; positions = []; customGroups = [];
+  messages = {}; approvals = []; positions = []; customGroups = []; groupOverrides = {};
   passwordResetRequests = []; reactions = {}; lastSeen = {}; savedGroupMembers = {};
   try{
     const [msgRows, apRows, posRows, groupRows] = await Promise.all([
@@ -1010,7 +1018,13 @@ async function loadData(){
       });
     });
 
-    customGroups = groupRows.map(r=>{
+    // Rows whose Title is a real custom-group id (created via "+ New Group") are
+    // actual groups; any other row here is a Higher Authority rename/icon
+    // override for one of the auto-generated base/branch groups (Title holds
+    // that group's fixed id, e.g. 'g_all', 'g_celeb', 'g_branch_xxx').
+    const realGroupRows = groupRows.filter(r=>(r.Title||'').startsWith('g_custom_'));
+    const overrideRows = groupRows.filter(r=>!(r.Title||'').startsWith('g_custom_'));
+    customGroups = realGroupRows.map(r=>{
       let memberIds = []; try{ memberIds = JSON.parse(r.MemberIds||'[]'); }catch(e){}
       return {
         id: r.Title, name: r.Name, type: r.CG_Type, postRestricted:false, icon: r.Icon||'',
@@ -1018,6 +1032,8 @@ async function loadData(){
       };
     });
     customGroups.forEach(g=>{ messages[g.id] = messages[g.id] || []; });
+    groupOverrides = {};
+    overrideRows.forEach(r=>{ groupOverrides[r.Title] = { name: r.Name, icon: r.Icon||'', __itemId: r.__itemId }; });
   }catch(e){
     console.error('loadData failed', e);
   }
@@ -1795,11 +1811,13 @@ async function persistCustomGroupMembers(g){
 }
 
 /* ============ GROUP SETTINGS (rename / icon / delete — Higher Authority only) ============
-   Only custom groups (created in-app) have anything to edit or delete — the
-   base groups (All Employees, Celebrations, Branch Managers) and the
-   per-branch Position Groups are auto-generated from EmployeeDirectory every
-   sync, so they open read-only here with a note explaining why. */
-function canEditGroupSettings(g){ return isHigherAuthority(currentUserId) && !!customGroups.find(c=>c.id===g.id); }
+   Any group's name and icon can be changed by Higher Authority — for the
+   auto-generated base/branch groups (All Employees, Celebrations, Branch
+   Managers, per-branch Position Groups) the rename/icon is stored as a small
+   "override" row in the CustomGroups list (see loadData). Deleting is only
+   possible for groups actually created in-app via "+ New Group", since the
+   base/branch groups are tied to the live Employee Directory. */
+function isRealCustomGroup(g){ return !!customGroups.find(c=>c.id===g.id); }
 
 function renderGroupSettingsButton(g){
   const wrap = document.getElementById('groupSettingsBtnWrap');
@@ -1808,56 +1826,103 @@ function renderGroupSettingsButton(g){
   wrap.innerHTML = `<button class="icon-btn secondary" style="width:34px;border-radius:8px;font-size:15px;" onclick="openGroupSettings()" title="Group settings">⚙️</button>`;
 }
 
+let gsSelectedIcon = '';
 function openGroupSettings(){
   const g = GROUPS.find(x=>x.id===activeGroupId);
-  const editable = canEditGroupSettings(g);
+  if(!isHigherAuthority(currentUserId)) return;
   const av = g.icon ? g.icon : g.type==='broadcast'?'📣':g.type==='celebration'?'🎉':g.name[0];
   const preview = document.getElementById('gsAvatarPreview');
   preview.textContent = av;
   preview.style.background = '';
 
-  document.getElementById('gsEditableBlock').style.display = editable ? 'block' : 'none';
-  document.getElementById('gsReadOnlyBlock').style.display = editable ? 'none' : 'block';
+  document.getElementById('gsEditableBlock').style.display = 'block';
+  document.getElementById('gsReadOnlyBlock').style.display = 'none';
 
-  if(editable){
-    gsSelectedIcon = g.icon || '';
-    document.getElementById('gsName').value = g.name;
-    document.getElementById('gsEmojiRow').innerHTML = ['','📣','🎉','💰','📈','🏦','🛡️','📋','⭐','🤝'].map(e=>
-      `<div class="emoji-opt ${gsSelectedIcon===e?'selected':''}" onclick="pickGsIcon('${e}')">${e || 'Aa'}</div>`
-    ).join('');
-  } else {
-    document.getElementById('gsRoName').textContent = g.name;
-    document.getElementById('gsRoMembers').textContent = g.memberIds.length;
-    document.getElementById('gsRoNote').textContent = 'This group is generated automatically from the Employee Directory, so its name and membership can\u2019t be edited or deleted here — update the directory instead.';
-  }
+  gsSelectedIcon = g.icon || '';
+  document.getElementById('gsName').value = g.name;
+  document.getElementById('gsEmojiRow').innerHTML = ['','📣','🎉','💰','📈','🏦','🛡️','📋','⭐','🤝'].map(e=>
+    `<div class="emoji-opt ${gsSelectedIcon===e?'selected':''}" onclick="pickGsIcon('${e}')">${e || 'Aa'}</div>`
+  ).join('');
+
+  const delBtnWrap = document.getElementById('gsDeleteWrap');
+  if(delBtnWrap) delBtnWrap.style.display = isRealCustomGroup(g) ? 'flex' : 'none';
+
   document.getElementById('groupSettingsModal').classList.add('show');
 }
-let gsSelectedIcon = '';
 function pickGsIcon(e){ gsSelectedIcon = e; openGroupSettings(); }
 function closeGroupSettings(){ document.getElementById('groupSettingsModal').classList.remove('show'); }
 
+/* Both create and patch calls include an Icon field, which needs a matching
+   "Icon" column on the CustomGroups SharePoint list. If that column hasn't
+   been added yet, Graph rejects the whole write with a 400 — these wrappers
+   catch that and silently retry without Icon, so renaming still works even
+   before the column exists; only the icon itself won't stick until it does. */
+async function createListItemIconSafe(listId, fields){
+  try{
+    return { item: await createListItem(listId, fields), iconSaved: true };
+  }catch(e){
+    if('Icon' in fields){
+      const rest = Object.assign({}, fields); delete rest.Icon;
+      return { item: await createListItem(listId, rest), iconSaved: false };
+    }
+    throw e;
+  }
+}
+async function patchListItemIconSafe(listId, itemId, fields){
+  try{
+    await patchListItemFields(listId, itemId, fields);
+    return true;
+  }catch(e){
+    if('Icon' in fields){
+      const rest = Object.assign({}, fields); delete rest.Icon;
+      await patchListItemFields(listId, itemId, rest);
+      return false;
+    }
+    throw e;
+  }
+}
+
 async function saveGroupSettings(){
   const g = GROUPS.find(x=>x.id===activeGroupId);
-  const cg = customGroups.find(c=>c.id===g.id);
-  if(!cg || !cg.__itemId) return;
   const newName = document.getElementById('gsName').value.trim();
   if(!newName){ alert('Group name can\u2019t be empty.'); return; }
+  const cg = customGroups.find(c=>c.id===g.id);
   try{
-    await patchListItemFields(APP_CONFIG.customGroupsListId, cg.__itemId, { Name: newName, Icon: gsSelectedIcon || '' });
-    g.name = newName; g.icon = gsSelectedIcon || '';
-    cg.name = newName; cg.icon = gsSelectedIcon || '';
+    let iconSaved = true;
+    if(cg && cg.__itemId){
+      // Real custom group — patch its own row directly.
+      iconSaved = await patchListItemIconSafe(APP_CONFIG.customGroupsListId, cg.__itemId, { Name: newName, Icon: gsSelectedIcon || '' });
+      cg.name = newName; cg.icon = iconSaved ? (gsSelectedIcon||'') : cg.icon;
+    } else {
+      // Base/branch group — patch or create its override row.
+      const existing = groupOverrides[g.id];
+      if(existing && existing.__itemId){
+        iconSaved = await patchListItemIconSafe(APP_CONFIG.customGroupsListId, existing.__itemId, { Name: newName, Icon: gsSelectedIcon || '' });
+        groupOverrides[g.id] = { name: newName, icon: iconSaved ? (gsSelectedIcon||'') : existing.icon, __itemId: existing.__itemId };
+      } else {
+        const res = await createListItemIconSafe(APP_CONFIG.customGroupsListId, {
+          Title: g.id, Name: newName, CG_Type: 'custom', Icon: gsSelectedIcon || '', MemberIds: '[]', CreatedBy: currentUserId
+        });
+        iconSaved = res.iconSaved;
+        groupOverrides[g.id] = { name: newName, icon: iconSaved ? (gsSelectedIcon||'') : '', __itemId: res.item.id };
+      }
+    }
+    g.name = newName; g.icon = iconSaved ? (gsSelectedIcon||'') : g.icon;
     closeGroupSettings();
     renderAll();
+    if(!iconSaved){
+      console.warn('Group name saved, but the icon didn\u2019t persist — add an "Icon" column (single line of text) to the CustomGroups SharePoint list.');
+    }
   }catch(e){
     console.error(e);
-    alert('Couldn\\u2019t save group settings to SharePoint — check your connection and try again. (This needs an "Icon" column on the CustomGroups list.)');
+    alert('Couldn\u2019t save group settings to SharePoint — check your connection and try again.');
   }
 }
 
 async function deleteGroupConfirm(){
   const g = GROUPS.find(x=>x.id===activeGroupId);
   const cg = customGroups.find(c=>c.id===g.id);
-  if(!cg || !cg.__itemId) return;
+  if(!cg || !cg.__itemId){ alert('This group is generated from the Employee Directory and can\u2019t be deleted here.'); return; }
   if(!confirm(`Delete "${g.name}"? This removes the group and its message history for everyone. This can\u2019t be undone.`)) return;
   try{
     await deleteListItem(APP_CONFIG.customGroupsListId, cg.__itemId);
@@ -1869,9 +1934,10 @@ async function deleteGroupConfirm(){
     renderAll();
   }catch(e){
     console.error(e);
-    alert('Couldn\\u2019t delete the group from SharePoint — check your connection and try again.');
+    alert('Couldn\u2019t delete the group from SharePoint — check your connection and try again.');
   }
 }
+
 
 /* ============ DAILY POSITION TEMPLATE (quick-send from chat) ============ */
 let dpBranchId = null;
@@ -1968,11 +2034,11 @@ async function submitCreateGroup(){
     memberIds: [...ngSelected]
   };
   try{
-    const created = await createListItem(APP_CONFIG.customGroupsListId, {
+    const res = await createListItemIconSafe(APP_CONFIG.customGroupsListId, {
       Title: g.id, Name: g.name, CG_Type: g.type, Icon: '',
       MemberIds: JSON.stringify(g.memberIds), CreatedBy: currentUserId
     });
-    g.__itemId = created.id;
+    g.__itemId = res.item.id;
   }catch(e){
     console.error(e);
     alert('Couldn\u2019t create the group in SharePoint — check your connection and try again.');
