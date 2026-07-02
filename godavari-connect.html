@@ -290,6 +290,26 @@
 
   .member-row{display:flex;align-items:center;gap:10px;padding:9px 12px;border-bottom:1px solid #f0ede3;}
   .member-row:last-child{border-bottom:none;}
+  .member-row .member-click{display:flex;align-items:center;gap:10px;flex:1;cursor:pointer;min-width:0;}
+  .member-row .member-click:hover .member-name{text-decoration:underline;}
+  /* GROUP SETTINGS + PROFILE (added) */
+  .gear-btn{background:none;border:none;color:#fff;font-size:17px;cursor:pointer;width:34px;height:34px;border-radius:8px;display:flex;align-items:center;justify-content:center;}
+  .gear-btn:hover{background:rgba(255,255,255,.12);}
+  .profile-head{display:flex;flex-direction:column;align-items:center;gap:8px;margin-bottom:6px;}
+  .profile-avatar-big{width:76px;height:76px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:26px;background:linear-gradient(135deg,var(--teal-mid),var(--teal-dark));}
+  .profile-name{font-family:Georgia,serif;font-size:17px;color:var(--teal-dark);font-weight:700;}
+  .profile-sub{font-size:12.5px;color:var(--muted);}
+  .profile-field{display:flex;justify-content:space-between;padding:8px 2px;border-bottom:1px solid #f0ede3;font-size:13px;}
+  .profile-field span:first-child{color:var(--muted);}
+  .profile-field span:last-child{font-weight:600;color:var(--ink);}
+  .swatch-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;}
+  .swatch{width:30px;height:30px;border-radius:50%;cursor:pointer;border:2px solid transparent;}
+  .swatch.selected{border-color:var(--teal-dark);}
+  .emoji-row{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;}
+  .emoji-opt{width:34px;height:34px;border-radius:8px;border:1px solid var(--line);background:#f7f5ee;font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;}
+  .emoji-opt.selected{border-color:var(--leaf);background:#dcf3e8;}
+  .settings-note{font-size:11.5px;color:var(--muted);background:#f7f5ee;border-radius:8px;padding:8px 10px;margin-top:4px;}
+  .btn-danger{background:var(--danger);color:#fff;}
   .member-info{flex:1;min-width:0;}
   .member-name{font-size:13px;font-weight:600;}
   .member-title{font-size:11px;color:var(--muted);}
@@ -557,7 +577,7 @@
     <span class="sync-badge checking" id="syncBadge" onclick="retrySync()" title="SharePoint / Graph connection status">⏳ Checking…</span>
     <button id="positionsBtn" class="desktop-positions-btn" onclick="openPositions()" style="background:#0e4a40;color:#fff;border:1px solid #1d6f5f;border-radius:8px;padding:7px 12px;font-size:12.5px;font-weight:700;cursor:pointer;">📊 Bank Positions</button>
     <div id="meetingBtnWrap"></div>
-    <div class="userchip" id="currentUserChip" title="You are signed in as this employee"></div>
+    <div class="userchip" id="currentUserChip" title="View / edit your profile" onclick="openMyProfile()" style="cursor:pointer;"></div>
     <button class="logout-btn" onclick="confirmLogout()">⏻ Logout</button>
   </div>
 </div>
@@ -596,6 +616,7 @@
       <div style="display:flex;align-items:center;gap:10px;">
         <div id="restrictedTag"></div>
         <button class="icon-btn secondary" style="width:auto;border-radius:8px;padding:0 12px;font-size:12.5px;font-weight:700;" onclick="openMembers()">👥 Members</button>
+        <div id="groupSettingsBtnWrap"></div>
       </div>
     </div>
     <div class="messages" id="messages"></div>
@@ -655,6 +676,63 @@
     <div id="addMemberBox" style="margin-top:14px;"></div>
     <div class="modal-actions">
       <button class="btn-cancel" onclick="closeMembers()">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- GROUP SETTINGS MODAL (Higher Authority: rename / change icon / delete group) -->
+<div class="modal-overlay" id="groupSettingsModal">
+  <div class="modal" style="width:400px;">
+    <h3>Group Settings</h3>
+    <div style="display:flex;flex-direction:column;align-items:center;gap:6px;margin-bottom:10px;">
+      <div class="profile-avatar-big" id="gsAvatarPreview">G</div>
+    </div>
+    <div id="gsEditableBlock" style="display:none;">
+      <label>Group icon (emoji)</label>
+      <div class="emoji-row" id="gsEmojiRow"></div>
+      <label>Group Name</label>
+      <input id="gsName" placeholder="Group name">
+      <div class="modal-actions">
+        <button class="btn-cancel" onclick="closeGroupSettings()">Cancel</button>
+        <button class="btn-submit" onclick="saveGroupSettings()">Save Changes</button>
+      </div>
+      <div class="modal-actions" style="margin-top:6px;">
+        <button class="btn-danger" style="flex:1;padding:9px;border-radius:7px;border:none;font-weight:700;cursor:pointer;font-size:13px;" onclick="deleteGroupConfirm()">🗑️ Delete Group</button>
+      </div>
+    </div>
+    <div id="gsReadOnlyBlock" style="display:none;">
+      <div class="profile-field"><span>Group Name</span><span id="gsRoName"></span></div>
+      <div class="profile-field"><span>Members</span><span id="gsRoMembers"></span></div>
+      <div class="settings-note" id="gsRoNote"></div>
+      <div class="modal-actions"><button class="btn-cancel" onclick="closeGroupSettings()">Close</button></div>
+    </div>
+  </div>
+</div>
+
+<!-- PROFILE MODAL (own profile = editable avatar; viewing a colleague = read-only) -->
+<div class="modal-overlay" id="profileModal">
+  <div class="modal" style="width:380px;">
+    <h3 id="profileModalTitle">Profile</h3>
+    <div class="profile-head">
+      <div class="profile-avatar-big" id="profAvatarPreview">?</div>
+      <div class="profile-name" id="profName"></div>
+      <div class="profile-sub" id="profRoleTag"></div>
+    </div>
+    <div id="profEditBlock" style="display:none;">
+      <label>Choose avatar colour</label>
+      <div class="swatch-row" id="profSwatchRow"></div>
+      <label>Choose avatar icon</label>
+      <div class="emoji-row" id="profEmojiRow"></div>
+      <div class="settings-note">This is how your avatar appears to everyone in Godavari Connect, same as a WhatsApp profile photo.</div>
+    </div>
+    <div style="margin-top:10px;">
+      <div class="profile-field"><span>Employee ID</span><span id="profEmpId"></span></div>
+      <div class="profile-field"><span>Branch</span><span id="profBranch"></span></div>
+      <div class="profile-field"><span>Designation</span><span id="profTitle"></span></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="closeProfile()" id="profCloseBtn">Close</button>
+      <button class="btn-submit" onclick="saveMyProfile()" id="profSaveBtn" style="display:none;">Save</button>
     </div>
   </div>
 </div>
@@ -888,7 +966,7 @@ async function loadData(){
       fetchAllListItems(APP_CONFIG.messagesListId, 'GroupId,SenderId,SenderName,Body,SentOn'),
       fetchAllListItems(APP_CONFIG.approvalsListId, 'Title,GroupId,RequesterId,A_Type,Details,Status,SubmittedOn'),
       fetchAllListItems(APP_CONFIG.positionsListId, 'BranchId,SubmittedBy,Data,SubmittedOn'),
-      fetchAllListItems(APP_CONFIG.customGroupsListId, 'Title,Name,CG_Type,MemberIds,CreatedBy'),
+      fetchAllListItems(APP_CONFIG.customGroupsListId, 'Title,Name,CG_Type,MemberIds,CreatedBy,Icon'),
     ]);
 
     msgRows.forEach(r=>{
@@ -935,7 +1013,7 @@ async function loadData(){
     customGroups = groupRows.map(r=>{
       let memberIds = []; try{ memberIds = JSON.parse(r.MemberIds||'[]'); }catch(e){}
       return {
-        id: r.Title, name: r.Name, type: r.CG_Type, postRestricted:false,
+        id: r.Title, name: r.Name, type: r.CG_Type, postRestricted:false, icon: r.Icon||'',
         sub: 'Custom group', memberIds, __itemId: r.__itemId
       };
     });
@@ -961,12 +1039,93 @@ function fmtTime(ts){
 }
 function initialsColor(id){ return id; }
 
+/* ============ AVATAR RENDERING (personal profile photo, WhatsApp-style) ============
+   Real image upload isn't wired to a document library, so "profile photo" here
+   means a chosen colour + emoji shown wherever the plain initials avatar used
+   to be. Falls back to the auto-generated initials/gradient when unset. */
+const AVATAR_COLORS = ['#0f5c4f','#15806d','#25a584','#c9a24b','#b5452f','#3a6ea5','#7a4fa0','#2f7a5c'];
+const AVATAR_EMOJIS = ['','😀','🙂','🧑\u200d💼','👩\u200d💼','🧔','👨\u200d🌾','🕵️','🦸','🐯','🌟','🍀','⚡','📊'];
+function userAvatarHtml(u, cls){
+  const style = u.avatarColor ? ` style="background:${u.avatarColor}"` : '';
+  const content = u.avatarIcon || u.avatar;
+  return `<div class="${cls}"${style}>${content}</div>`;
+}
+
 /* ============ CURRENT USER CHIP (real signed-in identity, no more "viewing as" demo switch) ============ */
 function renderCurrentUserChip(){
   const chip = document.getElementById('currentUserChip');
   if(!chip) return;
   const u = getUser(currentUserId);
   chip.innerHTML = u ? `<span class="dot-live"></span><span>${escapeHtml(u.name)} · ${escapeHtml(u.role)}</span>` : '';
+}
+
+/* ============ PROFILE (own = editable avatar; a colleague's = read-only view) ============ */
+let profileViewingUid = null;
+let profSelectedColor = '';
+let profSelectedEmoji = '';
+
+function openMyProfile(){
+  if(!currentUserId) return;
+  profileViewingUid = currentUserId;
+  renderProfileModal();
+  document.getElementById('profileModal').classList.add('show');
+}
+function viewEmployeeProfile(uid){
+  profileViewingUid = uid;
+  renderProfileModal();
+  document.getElementById('profileModal').classList.add('show');
+}
+function closeProfile(){ document.getElementById('profileModal').classList.remove('show'); }
+
+function renderProfileModal(){
+  const u = getUser(profileViewingUid);
+  if(!u){ closeProfile(); return; }
+  const editable = profileViewingUid === currentUserId;
+  document.getElementById('profileModalTitle').textContent = editable ? 'My Profile' : 'Employee Profile';
+  document.getElementById('profName').textContent = u.name;
+  document.getElementById('profRoleTag').textContent = u.role + (isHigherAuthority(u.id) ? ' · Head Office / HR' : '');
+  document.getElementById('profEmpId').textContent = u.employeeId || '—';
+  document.getElementById('profBranch').textContent = u.branch || '—';
+  document.getElementById('profTitle').textContent = u.title || '—';
+
+  profSelectedColor = u.avatarColor || '';
+  profSelectedEmoji = u.avatarIcon || '';
+  const preview = document.getElementById('profAvatarPreview');
+  preview.style.background = profSelectedColor || '';
+  preview.textContent = profSelectedEmoji || u.avatar;
+
+  document.getElementById('profEditBlock').style.display = editable ? 'block' : 'none';
+  document.getElementById('profSaveBtn').style.display = editable ? 'inline-block' : 'none';
+  document.getElementById('profCloseBtn').textContent = editable ? 'Cancel' : 'Close';
+
+  if(editable){
+    document.getElementById('profSwatchRow').innerHTML = AVATAR_COLORS.map(c=>
+      `<div class="swatch ${profSelectedColor===c?'selected':''}" style="background:${c}" onclick="pickProfileColor('${c}')" title="${c}"></div>`
+    ).join('');
+    document.getElementById('profEmojiRow').innerHTML = AVATAR_EMOJIS.map(e=>
+      `<div class="emoji-opt ${profSelectedEmoji===e?'selected':''}" onclick="pickProfileEmoji('${e.replace(/'/g,"\\'")}')">${e || 'Aa'}</div>`
+    ).join('');
+  }
+}
+function pickProfileColor(c){ profSelectedColor = c; renderProfileModal(); }
+function pickProfileEmoji(e){ profSelectedEmoji = e; renderProfileModal(); }
+
+async function saveMyProfile(){
+  const u = getUser(currentUserId);
+  if(!u || !u.__itemId){
+    alert('Couldn\u2019t save — your directory record is missing an internal reference. Please refresh (or re-sync) and try again.');
+    return;
+  }
+  try{
+    await patchEmployeeFields(u.__itemId, { AvatarColor: profSelectedColor || '', AvatarIcon: profSelectedEmoji || '' });
+    u.avatarColor = profSelectedColor || '';
+    u.avatarIcon = profSelectedEmoji || '';
+    closeProfile();
+    renderAll();
+  }catch(e){
+    console.error(e);
+    alert('Couldn\u2019t save your profile photo to SharePoint — check your connection and try again. (This needs an "AvatarColor" and "AvatarIcon" column on the EmployeeDirectory list.)');
+  }
 }
 
 /* ============ UNREAD TRACKING (shown inline on the group itself, WhatsApp-style) ============ */
@@ -1024,7 +1183,7 @@ function renderGroupList(){
     const msgs = messages[g.id]||[];
     const last = msgs[msgs.length-1];
     const avClass = g.type==='broadcast' ? 'broadcast' : '';
-    const av = g.type==='broadcast' ? '📣' : g.type==='celebration' ? '🎉' : g.name.split(' ').map(w=>w[0]).slice(0,2).join('');
+    const av = g.icon ? g.icon : g.type==='broadcast' ? '📣' : g.type==='celebration' ? '🎉' : g.name.split(' ').map(w=>w[0]).slice(0,2).join('');
     /* Unread badge lives ON the group row itself — exactly like WhatsApp —
        instead of a separate notification centre. It's per-viewer: a Manager
        switching in sees only what's unread for THEM in groups they belong to. */
@@ -1145,7 +1304,8 @@ function renderChat(){
   const g = GROUPS.find(x=>x.id===activeGroupId);
   document.getElementById('chatTitle').textContent = g.name;
   document.getElementById('chatSub').textContent = `${g.memberIds.length} members · ${g.sub}`;
-  document.getElementById('chatAvatar').textContent = g.type==='broadcast'?'📣':g.type==='celebration'?'🎉':g.name[0];
+  document.getElementById('chatAvatar').textContent = g.icon ? g.icon : g.type==='broadcast'?'📣':g.type==='celebration'?'🎉':g.name[0];
+  renderGroupSettingsButton(g);
   document.getElementById('restrictedTag').innerHTML = g.postRestricted ? '<span class="post-restricted-tag">🔒 Only Higher Authority can post</span>' : '';
 
   const msgs = messages[g.id]||[];
@@ -1384,14 +1544,15 @@ async function sendMessage(){
 /* ============ APPROVALS PANEL ============ */
 function renderRightPanel(){
   const body = document.getElementById('rightBody');
-  const canRequest = isManagerOrAbove(currentUserId);
+  const isVisible = isManagerOrAbove(currentUserId); // panel exists for Manager + Higher Authority
+  const canRequest = getUser(currentUserId).role === 'Manager'; // only Managers request — Higher Authority decides
   const canDecide = isHigherAuthority(currentUserId);
 
   /* Visibility rule: plain employees never see the approvals panel at all.
      A Manager only sees the requests THEY raised. Higher Authority / HR
      (HR is modelled as a Higher Authority user) see every request. This
      keeps a manager's escalation to Head Office invisible to other staff. */
-  if(!canRequest && !canDecide){
+  if(!isVisible){
     body.innerHTML = `<div class="empty-note">🔒 Approvals &amp; requests are visible only to Branch Managers and Head Office / HR.</div>`;
     const titleElLocked = document.getElementById('rightTitle');
     if(titleElLocked) titleElLocked.innerHTML = 'Approvals &amp; Requests';
@@ -1564,12 +1725,14 @@ function renderMembersModal(){
     const u = getUser(uid);
     return `
     <div class="member-row">
-      <div class="small-avatar">${u.avatar}</div>
-      <div class="member-info">
-        <div class="member-name">${u.name}${isHigherAuthority(uid)?'<span class="member-tag ha">'+u.role.toUpperCase()+'</span>':''}</div>
-        <div class="member-title">${u.title}</div>
+      <div class="member-click" onclick="viewEmployeeProfile('${uid}')" title="View profile">
+        ${userAvatarHtml(u,'small-avatar')}
+        <div class="member-info">
+          <div class="member-name">${u.name}${isHigherAuthority(uid)?'<span class="member-tag ha">'+u.role.toUpperCase()+'</span>':''}</div>
+          <div class="member-title">${u.title}</div>
+        </div>
       </div>
-      ${manage ? `<button class="remove-btn" onclick="removeMember('${g.id}','${uid}')">Remove</button>` : ''}
+      ${manage ? `<button class="remove-btn" onclick="event.stopPropagation();removeMember('${g.id}','${uid}')">Remove</button>` : ''}
     </div>`;
   }).join('');
 
@@ -1628,6 +1791,85 @@ async function persistCustomGroupMembers(g){
   }catch(e){
     console.error(e);
     alert('Couldn\u2019t save the member change to SharePoint — check your connection and try again.');
+  }
+}
+
+/* ============ GROUP SETTINGS (rename / icon / delete — Higher Authority only) ============
+   Only custom groups (created in-app) have anything to edit or delete — the
+   base groups (All Employees, Celebrations, Branch Managers) and the
+   per-branch Position Groups are auto-generated from EmployeeDirectory every
+   sync, so they open read-only here with a note explaining why. */
+function canEditGroupSettings(g){ return isHigherAuthority(currentUserId) && !!customGroups.find(c=>c.id===g.id); }
+
+function renderGroupSettingsButton(g){
+  const wrap = document.getElementById('groupSettingsBtnWrap');
+  if(!wrap) return;
+  if(!isHigherAuthority(currentUserId)){ wrap.innerHTML = ''; return; }
+  wrap.innerHTML = `<button class="icon-btn secondary" style="width:34px;border-radius:8px;font-size:15px;" onclick="openGroupSettings()" title="Group settings">⚙️</button>`;
+}
+
+function openGroupSettings(){
+  const g = GROUPS.find(x=>x.id===activeGroupId);
+  const editable = canEditGroupSettings(g);
+  const av = g.icon ? g.icon : g.type==='broadcast'?'📣':g.type==='celebration'?'🎉':g.name[0];
+  const preview = document.getElementById('gsAvatarPreview');
+  preview.textContent = av;
+  preview.style.background = '';
+
+  document.getElementById('gsEditableBlock').style.display = editable ? 'block' : 'none';
+  document.getElementById('gsReadOnlyBlock').style.display = editable ? 'none' : 'block';
+
+  if(editable){
+    gsSelectedIcon = g.icon || '';
+    document.getElementById('gsName').value = g.name;
+    document.getElementById('gsEmojiRow').innerHTML = ['','📣','🎉','💰','📈','🏦','🛡️','📋','⭐','🤝'].map(e=>
+      `<div class="emoji-opt ${gsSelectedIcon===e?'selected':''}" onclick="pickGsIcon('${e}')">${e || 'Aa'}</div>`
+    ).join('');
+  } else {
+    document.getElementById('gsRoName').textContent = g.name;
+    document.getElementById('gsRoMembers').textContent = g.memberIds.length;
+    document.getElementById('gsRoNote').textContent = 'This group is generated automatically from the Employee Directory, so its name and membership can\u2019t be edited or deleted here — update the directory instead.';
+  }
+  document.getElementById('groupSettingsModal').classList.add('show');
+}
+let gsSelectedIcon = '';
+function pickGsIcon(e){ gsSelectedIcon = e; openGroupSettings(); }
+function closeGroupSettings(){ document.getElementById('groupSettingsModal').classList.remove('show'); }
+
+async function saveGroupSettings(){
+  const g = GROUPS.find(x=>x.id===activeGroupId);
+  const cg = customGroups.find(c=>c.id===g.id);
+  if(!cg || !cg.__itemId) return;
+  const newName = document.getElementById('gsName').value.trim();
+  if(!newName){ alert('Group name can\u2019t be empty.'); return; }
+  try{
+    await patchListItemFields(APP_CONFIG.customGroupsListId, cg.__itemId, { Name: newName, Icon: gsSelectedIcon || '' });
+    g.name = newName; g.icon = gsSelectedIcon || '';
+    cg.name = newName; cg.icon = gsSelectedIcon || '';
+    closeGroupSettings();
+    renderAll();
+  }catch(e){
+    console.error(e);
+    alert('Couldn\\u2019t save group settings to SharePoint — check your connection and try again. (This needs an "Icon" column on the CustomGroups list.)');
+  }
+}
+
+async function deleteGroupConfirm(){
+  const g = GROUPS.find(x=>x.id===activeGroupId);
+  const cg = customGroups.find(c=>c.id===g.id);
+  if(!cg || !cg.__itemId) return;
+  if(!confirm(`Delete "${g.name}"? This removes the group and its message history for everyone. This can\u2019t be undone.`)) return;
+  try{
+    await deleteListItem(APP_CONFIG.customGroupsListId, cg.__itemId);
+    customGroups = customGroups.filter(c=>c.id!==g.id);
+    delete messages[g.id];
+    activeGroupId = 'g_all';
+    closeGroupSettings();
+    rebuildBranchesAndGroups();
+    renderAll();
+  }catch(e){
+    console.error(e);
+    alert('Couldn\\u2019t delete the group from SharePoint — check your connection and try again.');
   }
 }
 
@@ -1699,7 +1941,7 @@ function renderNewGroupMemberList(){
   box.innerHTML = filtered.map(u=>`
     <label class="member-row" style="cursor:pointer;">
       <input type="checkbox" style="margin-right:2px;" ${ngSelected.has(u.id)?'checked':''} onchange="toggleNgMember('${u.id}', this.checked)">
-      <div class="small-avatar">${u.avatar}</div>
+      ${userAvatarHtml(u,'small-avatar')}
       <div class="member-info">
         <div class="member-name">${u.name}</div>
         <div class="member-title">${u.title}</div>
@@ -1721,12 +1963,13 @@ async function submitCreateGroup(){
     name,
     type: document.getElementById('ngType').value,
     postRestricted:false,
+    icon: '',
     sub: 'Created by '+getUser(currentUserId).name,
     memberIds: [...ngSelected]
   };
   try{
     const created = await createListItem(APP_CONFIG.customGroupsListId, {
-      Title: g.id, Name: g.name, CG_Type: g.type,
+      Title: g.id, Name: g.name, CG_Type: g.type, Icon: '',
       MemberIds: JSON.stringify(g.memberIds), CreatedBy: currentUserId
     });
     g.__itemId = created.id;
@@ -1921,7 +2164,7 @@ async function identifyEmployeeByUPN(upn){
 async function fetchEmployeeDirectory(upn){
   const token = await getGraphToken();
   let url = `https://graph.microsoft.com/v1.0/sites/${APP_CONFIG.siteId}/lists/${APP_CONFIG.employeeListId}/items`
-    + `?$expand=fields($select=Title,EmployeeID,FullName,Branch,Role,M365UPN,Status,PasswordHash,UpdatedOn)&$top=200`;
+    + `?$expand=fields($select=Title,EmployeeID,FullName,Branch,Role,M365UPN,Status,PasswordHash,UpdatedOn,AvatarColor,AvatarIcon)&$top=200`;
   if(upn) url += `&$filter=fields/M365UPN eq '${upn}'`;
   let rows = [];
   while(url){
@@ -1971,6 +2214,12 @@ async function createListItem(listId, fieldsObj){
   });
   if(!resp.ok) throw new Error('Graph create failed: ' + resp.status);
   return resp.json(); // includes .id — the new SharePoint list-item id
+}
+async function deleteListItem(listId, itemId){
+  const token = await getGraphToken();
+  const url = `https://graph.microsoft.com/v1.0/sites/${APP_CONFIG.siteId}/lists/${listId}/items/${itemId}`;
+  const resp = await fetch(url, { method: 'DELETE', headers: { Authorization: 'Bearer ' + token } });
+  if(!resp.ok) throw new Error('Graph delete failed: ' + resp.status);
 }
 async function patchListItemFields(listId, itemId, fieldsObj){
   const token = await getGraphToken();
@@ -2028,6 +2277,13 @@ function rowToUser(row){
     upn: row.M365UPN,
     employeeId: row.EmployeeID,
     branch: row.Branch,
+    // Personal profile customisation (WhatsApp-style "profile photo"), stored
+    // as an emoji + colour rather than an actual uploaded image file — needs
+    // two new columns, AvatarColor (single line text, hex) and AvatarIcon
+    // (single line text, emoji), added to the EmployeeDirectory list.
+    avatarColor: row.AvatarColor || '',
+    avatarIcon: row.AvatarIcon || '',
+    __itemId: row.__itemId,
   };
 }
 function mapDesignationToRole(designationOrRole){
