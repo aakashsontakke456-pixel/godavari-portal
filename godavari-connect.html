@@ -1695,7 +1695,7 @@ async function signInWithMicrosoft(){
     });
     await msalInstance.initialize(); // required in MSAL.js v3 before any other API call
     const result = await msalInstance.loginPopup({
-      scopes: ['User.Read', 'Sites.Read.All', 'ChannelMessage.Send', 'Chat.ReadWrite']
+      scopes: ['User.Read', 'Sites.ReadWrite.All', 'ChannelMessage.Send', 'Chat.ReadWrite']
     });
     const upn = result.account.username; // e.g. nagpur@godavariurban.onmicrosoft.com
     await identifyEmployeeByUPN(upn);
@@ -1754,7 +1754,7 @@ async function fetchEmployeeDirectory(upn){
 async function getGraphToken(){
   const account = msalInstance.getAllAccounts()[0];
   const result = await msalInstance.acquireTokenSilent({
-    scopes: ['Sites.Read.All'], account
+    scopes: ['Sites.ReadWrite.All'], account
   });
   return result.accessToken;
 }
