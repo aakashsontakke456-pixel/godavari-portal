@@ -2031,7 +2031,14 @@ function rowToUser(row){
   };
 }
 function mapDesignationToRole(designationOrRole){
-  const s = (designationOrRole || '').toLowerCase();
+  const s = (designationOrRole || '').toLowerCase().trim();
+  // EmployeeDirectory's Role column already holds clean values — match those
+  // directly first, so "Higher Authority" / "Branch Manager" never fall
+  // through to the designation-text heuristics below and get downgraded.
+  if(s === 'higher authority') return 'Higher Authority';
+  if(s === 'branch manager' || s === 'manager') return 'Manager';
+  if(s === 'employee') return 'Employee';
+  // Fallback for free-text designations (e.g. imported from a different column)
   if(s.includes('managing director') || s.includes('general manager') || s.includes(' hr') || s.startsWith('hr')) return 'Higher Authority';
   if(s.includes('manager')) return 'Manager';
   return 'Employee';
