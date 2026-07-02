@@ -1693,6 +1693,7 @@ async function signInWithMicrosoft(){
       },
       cache: { cacheLocation: 'sessionStorage' } // per-session only — important on shared branch PCs
     });
+    await msalInstance.initialize(); // required in MSAL.js v3 before any other API call
     const result = await msalInstance.loginPopup({
       scopes: ['User.Read', 'Sites.Read.All', 'ChannelMessage.Send', 'Chat.ReadWrite']
     });
