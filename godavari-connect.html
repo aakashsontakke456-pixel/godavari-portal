@@ -1732,7 +1732,9 @@ async function signInWithMicrosoft(){
     });
     await msalInstance.initialize(); // required in MSAL.js v3 before any other API call
     const result = await msalInstance.loginPopup({
-      scopes: ['User.Read', 'Sites.ReadWrite.All', 'ChannelMessage.Send', 'Chat.ReadWrite', 'OnlineMeetings.ReadWrite', 'Calendars.ReadWrite']
+      scopes: ['User.Read', 'Sites.ReadWrite.All', 'ChannelMessage.Send', 'Chat.ReadWrite']
+      // OnlineMeetings.ReadWrite is requested later, only when someone clicks "New Teams Meeting" (see acquireTokenPopup below) —
+      // keeps login itself to permissions every employee actually needs, so regular staff never hit an admin-consent wall.
     });
     const upn = result.account.username; // e.g. nagpur@godavariurban.onmicrosoft.com
     await identifyEmployeeByUPN(upn);
@@ -1780,17 +1782,33 @@ async function identifyEmployeeByUPN(upn){
 async function fetchEmployeeDirectory(upn){
   const token = await getGraphToken();
   let url = `https://graph.microsoft.com/v1.0/sites/${APP_CONFIG.siteId}/lists/${APP_CONFIG.employeeListId}/items`
-    + `?$expand=fields($select=Title,EmployeeID,FullName,Branch,Role,M365UPN,Status)&$top=200`;
+    + `?$expand=fields($select=Title,EmployeeID,FullName,Branch,Role,M365UPN,Status,PasswordHash,UpdatedOn)&$top=200`;
   if(upn) url += `&$filter=fields/M365UPN eq '${upn}'`;
   let rows = [];
   while(url){
     const resp = await fetch(url, { headers: { Authorization: 'Bearer ' + token } });
     if(!resp.ok) throw new Error('Graph request failed: ' + resp.status);
     const data = await resp.json();
-    rows = rows.concat((data.value || []).map(item => item.fields));
+    // __itemId is the SharePoint list-item id (distinct from EmployeeID) — kept on each
+    // row so password writes can PATCH the exact item without a second lookup call.
+    rows = rows.concat((data.value || []).map(item => Object.assign({}, item.fields, { __itemId: item.id })));
     url = data['@odata.nextLink'] || null;
   }
   return rows;
+}
+
+/* PATCHes PasswordHash/UpdatedOn (or any EmployeeDirectory field) on one item by its
+   SharePoint list-item id. Same Sites.ReadWrite.All permission already used for reads. */
+async function patchEmployeeFields(itemId, fieldsObj){
+  const token = await getGraphToken();
+  const url = `https://graph.microsoft.com/v1.0/sites/${APP_CONFIG.siteId}/lists/${APP_CONFIG.employeeListId}/items/${itemId}/fields`;
+  const resp = await fetch(url, {
+    method: 'PATCH',
+    headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+    body: JSON.stringify(fieldsObj)
+  });
+  if(!resp.ok) throw new Error('Graph patch failed: ' + resp.status);
+  return resp.json();
 }
 
 async function getGraphToken(){
@@ -1876,7 +1894,7 @@ async function confirmIdentity(){
     if(!row){ showAuthError('whoamiError','That Employee ID isn\u2019t linked to this Microsoft login. Check with your Branch Manager or HR.'); return; }
     pendingRow = row;
     document.getElementById('whoamiCode').disabled = true;
-    const hasPw = await hasStoredPassword(row.EmployeeID);
+    const hasPw = await hasStoredPassword(row);
     if(hasPw){
       authStage = 'password';
       document.getElementById('whoamiTitle').textContent = 'Enter your password';
@@ -1899,7 +1917,7 @@ async function confirmIdentity(){
   if(authStage === 'password'){
     const pw = document.getElementById('whoamiPin').value;
     if(!pw){ showAuthError('whoamiError','Enter your password.'); return; }
-    const ok = await verifyStoredPassword(pendingRow.EmployeeID, pw);
+    const ok = await verifyStoredPassword(pendingRow, pw);
     if(!ok){ showAuthError('whoamiError','Incorrect password. Tap "Forgot password?" if you need it reset.'); return; }
     finishLogin(pendingRow);
     return;
@@ -1909,35 +1927,39 @@ async function confirmIdentity(){
     const pw2 = document.getElementById('whoamiPin2').value;
     if(pw.length < 4){ showAuthError('whoamiError','Password must be at least 4 characters.'); return; }
     if(pw !== pw2){ showAuthError('whoamiError','Passwords don\u2019t match.'); return; }
-    await setStoredPassword(pendingRow.EmployeeID, pw);
+    await setStoredPassword(pendingRow, pw);
     finishLogin(pendingRow);
     return;
   }
 }
 
 /* ============ PASSWORD STORAGE ============
-   Stored as a SHA-256 hash, never plaintext, and never read from the Master
-   Data "Userpassword" column. For a production rollout this check belongs
-   behind a server-side endpoint (Power Automate HTTP trigger / Azure
-   Function) rather than in client JS — this hashed, storage-backed version
-   is the working version until that endpoint exists. */
+   Stored as a SHA-256 hash, never plaintext, in the PasswordHash column on
+   EmployeeDirectory (never the Master Data "Userpassword" column). Reads
+   come from the row already fetched at login (no extra call); writes PATCH
+   that row's PasswordHash + UpdatedOn via Graph, using __itemId captured in
+   fetchEmployeeDirectory. For a real 1000-employee rollout this check still
+   belongs behind a server-side endpoint (Power Automate HTTP trigger / Azure
+   Function) rather than client JS — this is the working version until that
+   endpoint exists. Note: everyone with access to the EmployeeDirectory list
+   in SharePoint can see the hash column, so lock that list's permissions
+   down to admins before go-live. */
 async function hashPassword(pw){
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('gc_salt_v1:'+pw));
   return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
 }
-async function hasStoredPassword(employeeId){
-  try{ const r = await window.storage.get('pw_'+employeeId, true); return !!(r && r.value); }
-  catch(e){ return false; }
+async function hasStoredPassword(row){
+  return !!(row && row.PasswordHash);
 }
-async function verifyStoredPassword(employeeId, pw){
-  try{
-    const r = await window.storage.get('pw_'+employeeId, true);
-    if(!r || !r.value) return false;
-    return r.value === await hashPassword(pw);
-  }catch(e){ return false; }
+async function verifyStoredPassword(row, pw){
+  if(!row || !row.PasswordHash) return false;
+  return row.PasswordHash === await hashPassword(pw);
 }
-async function setStoredPassword(employeeId, pw){
-  await window.storage.set('pw_'+employeeId, await hashPassword(pw), true);
+async function setStoredPassword(row, pw){
+  const hash = await hashPassword(pw);
+  const nowIso = new Date().toISOString();
+  await patchEmployeeFields(row.__itemId, { PasswordHash: hash, UpdatedOn: nowIso });
+  row.PasswordHash = hash; row.UpdatedOn = nowIso; // keep the in-memory row consistent post-write
 }
 
 /* ============ FORGOT PASSWORD ============ */
@@ -1945,8 +1967,8 @@ async function requestPasswordReset(){
   if(!pendingRow) return;
   passwordResetRequests = passwordResetRequests.filter(r=>r.employeeId!==pendingRow.EmployeeID);
   passwordResetRequests.push({
-    id:'pwr_'+Date.now(), employeeId: pendingRow.EmployeeID, name: pendingRow.FullName,
-    branch: pendingRow.Branch, time: Date.now()
+    id:'pwr_'+Date.now(), employeeId: pendingRow.EmployeeID, itemId: pendingRow.__itemId,
+    name: pendingRow.FullName, branch: pendingRow.Branch, time: Date.now()
   });
   await saveData();
   document.getElementById('whoamiOkNote').style.display = 'block';
@@ -1958,7 +1980,24 @@ async function requestPasswordReset(){
 async function approvePasswordReset(reqId){
   const req = passwordResetRequests.find(r=>r.id===reqId);
   if(!req) return;
-  try{ await window.storage.delete('pw_'+req.employeeId, true); }catch(e){}
+  try{
+    let itemId = req.itemId;
+    if(!itemId){
+      // Fallback for older queued requests saved before itemId was captured —
+      // look the row up by EmployeeID to find its SharePoint item id.
+      const token = await getGraphToken();
+      const url = `https://graph.microsoft.com/v1.0/sites/${APP_CONFIG.siteId}/lists/${APP_CONFIG.employeeListId}/items`
+        + `?$filter=fields/EmployeeID eq '${req.employeeId}'&$expand=fields($select=EmployeeID)`;
+      const resp = await fetch(url, { headers: { Authorization: 'Bearer ' + token } });
+      if(resp.ok){ const data = await resp.json(); itemId = data.value && data.value[0] && data.value[0].id; }
+    }
+    if(!itemId) throw new Error('Could not locate employee row in SharePoint');
+    await patchEmployeeFields(itemId, { PasswordHash: '', UpdatedOn: new Date().toISOString() });
+  }catch(e){
+    console.error(e);
+    alert('Could not clear the password in SharePoint. Please try again.');
+    return;
+  }
   passwordResetRequests = passwordResetRequests.filter(r=>r.id!==reqId);
   await saveData();
   renderRightPanel();
