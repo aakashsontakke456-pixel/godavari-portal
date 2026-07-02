@@ -491,6 +491,16 @@
     font-size:14px;margin-bottom:12px;letter-spacing:2px;text-align:center;display:none;
   }
   .auth-loading{font-size:12.5px;color:var(--muted);padding:20px 0;}
+  .auth-link{display:block;text-align:center;font-size:12.5px;color:var(--teal-mid);cursor:pointer;margin-top:12px;text-decoration:underline;background:none;border:none;width:100%;font-family:inherit;}
+  .auth-back{display:block;text-align:center;font-size:12px;color:var(--muted);cursor:pointer;margin-top:6px;background:none;border:none;width:100%;font-family:inherit;}
+  .auth-ok-note{font-size:12px;color:#1d6f5f;background:#eaf6f0;border-radius:8px;padding:8px 10px;margin-bottom:10px;display:none;}
+  .sync-badge{font-size:10.5px;padding:3px 9px;border-radius:10px;font-weight:700;cursor:default;}
+  .sync-badge.ok{background:rgba(255,255,255,.15);color:#bdf3d8;}
+  .sync-badge.bad{background:rgba(255,255,255,.15);color:#ffb3ac;cursor:pointer;}
+  .sync-badge.checking{background:rgba(255,255,255,.15);color:#f0e6c8;}
+  .logout-btn{background:transparent;border:1px solid rgba(255,255,255,.4);color:#fff;border-radius:8px;padding:6px 11px;font-size:12px;font-weight:700;cursor:pointer;}
+  .logout-btn:hover{background:rgba(255,255,255,.12);}
+  .meeting-btn{background:#0e4a40;color:#fff;border:1px solid #1d6f5f;border-radius:8px;padding:7px 12px;font-size:12.5px;font-weight:700;cursor:pointer;}
 </style>
 </head>
 <body>
@@ -510,17 +520,23 @@
   </div>
 </div>
 
-<!-- ===== STEP 2: WHICH EMPLOYEE ARE YOU (handles shared branch logins) ===== -->
+<!-- ===== STEP 2: EMPLOYEE CODE + PASSWORD (WhatsApp-style personal login on a shared branch device) ===== -->
 <div class="auth-overlay" id="authStep2" style="display:none;">
   <div class="auth-card">
     <div class="auth-mark">G</div>
-    <div class="auth-title">Who's using the app?</div>
+    <div class="auth-title" id="whoamiTitle">Enter your Employee ID</div>
     <div class="whoami-branch" id="whoamiBranch"></div>
+    <div class="auth-ok-note" id="whoamiOkNote"></div>
     <div class="auth-error" id="whoamiError"></div>
-    <div class="whoami-list" id="whoamiList"></div>
-    <input class="whoami-pin" id="whoamiPin" maxlength="6" placeholder="Enter your 4-digit PIN" inputmode="numeric">
-    <button class="btn-ms" style="background:var(--leaf);color:#fff;border-color:var(--leaf);" id="whoamiConfirm" onclick="confirmIdentity()" disabled>Continue</button>
-    <div class="auth-note">Don't see your name, or new here? Ask your Branch Manager or HR to add you to the Employee Directory.</div>
+
+    <input class="whoami-pin" id="whoamiCode" style="letter-spacing:1px;" placeholder="Employee ID (e.g. EMP1024)" autocomplete="username">
+    <input class="whoami-pin" id="whoamiPin" type="password" placeholder="Password" autocomplete="current-password" style="display:none;">
+    <input class="whoami-pin" id="whoamiPin2" type="password" placeholder="Confirm password" autocomplete="new-password" style="display:none;">
+
+    <button class="btn-ms" style="background:var(--leaf);color:#fff;border-color:var(--leaf);" id="whoamiConfirm" onclick="confirmIdentity()">Continue</button>
+    <button class="auth-link" id="forgotPwBtn" onclick="requestPasswordReset()" style="display:none;">Forgot password?</button>
+    <button class="auth-back" onclick="backToStep1()">← Use a different Microsoft account</button>
+    <div class="auth-note">Don't see your Employee ID recognised, or new here? Ask your Branch Manager or HR to add you to the Employee Directory.</div>
   </div>
 </div>
 
@@ -537,13 +553,12 @@
       <div class="brand-sub">Multi-State Credit Co-operative</div>
     </div>
   </div>
-  <div style="display:flex;align-items:center;gap:14px;">
+  <div style="display:flex;align-items:center;gap:12px;">
+    <span class="sync-badge checking" id="syncBadge" onclick="retrySync()" title="SharePoint / Graph connection status">⏳ Checking…</span>
     <button id="positionsBtn" class="desktop-positions-btn" onclick="openPositions()" style="background:#0e4a40;color:#fff;border:1px solid #1d6f5f;border-radius:8px;padding:7px 12px;font-size:12.5px;font-weight:700;cursor:pointer;">📊 Bank Positions</button>
-    <div class="role-switch">
-      <span class="rs-label">Viewing as:</span>
-      <select id="roleSelect" onchange="switchUser()"></select>
-    </div>
-    <div class="userchip"><span class="dot-live"></span><span id="onlineCount">1000 employees connected</span></div>
+    <div id="meetingBtnWrap"></div>
+    <div class="userchip" id="currentUserChip" title="You are signed in as this employee"></div>
+    <button class="logout-btn" onclick="confirmLogout()">⏻ Logout</button>
   </div>
 </div>
 
@@ -678,6 +693,40 @@
   </div>
 </div>
 
+<!-- LOGOUT CONFIRMATION -->
+<div class="modal-overlay" id="logoutModal">
+  <div class="modal" style="width:340px;">
+    <h3>Log out?</h3>
+    <p style="font-size:13px;color:var(--ink);margin:0 0 4px;">You'll need to sign in with Microsoft and your Employee ID + password again to get back in.</p>
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="closeLogoutModal()">Cancel</button>
+      <button class="btn-submit" style="background:#b3261e;" onclick="doLogout()">Log Out</button>
+    </div>
+  </div>
+</div>
+
+<!-- NEW TEAMS MEETING (Higher Authority / HR) -->
+<div class="modal-overlay" id="meetingModal">
+  <div class="modal" style="width:420px;">
+    <h3>📅 New Teams Meeting</h3>
+    <div class="auth-error" id="meetingError" style="display:none;"></div>
+    <label>Subject</label>
+    <input id="mtSubject" placeholder="e.g. Monthly Branch Review">
+    <label>Audience</label>
+    <select id="mtGroup"></select>
+    <label>Date</label>
+    <input id="mtDate" type="date">
+    <label>Time</label>
+    <input id="mtTime" type="time">
+    <label>Duration (minutes)</label>
+    <input id="mtDuration" type="number" value="30" min="15" step="15">
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="closeMeetingModal()">Cancel</button>
+      <button class="btn-submit" onclick="submitMeeting()">Create & Share Link</button>
+    </div>
+  </div>
+</div>
+
 <!-- HIDDEN FILE INPUTS -->
 <input type="file" id="fileInputMedia" accept="image/*,video/*" style="display:none" onchange="handleFileSelected(event)">
 <input type="file" id="fileInputDoc" accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.ppt,.pptx" style="display:none" onchange="handleFileSelected(event)">
@@ -734,128 +783,106 @@ const APP_CONFIG = {
 };
 
 /* ============ DATA MODEL ============ */
-/* USERS is now populated at sign-in time from the EmployeeDirectory SharePoint list
-   (see fetchEmployeeDirectory / mapDirectoryRowToUser below), instead of being
-   hardcoded. The seed rows below are unused now that Demo Mode has been removed —
-   safe to delete once you're fully on real sign-in, kept here as a fallback reference. */
-let USERS = [
-  {id:'u_md', name:'R. Subramaniam', role:'Higher Authority', title:'Managing Director', avatar:'RS', upn:'r.subramaniam@godavariurban.onmicrosoft.com'},
-  {id:'u_hr', name:'HR – Head Office', role:'Higher Authority', title:'HR Department', avatar:'HR', upn:'hr@godavariurban.onmicrosoft.com'},
-  {id:'u_mgr1', name:'Anil Kumar', role:'Manager', title:'Branch Manager – Nashik', avatar:'AK', upn:'nashik@godavariurban.onmicrosoft.com'},
-  {id:'u_emp1', name:'Priya Deshmukh', role:'Employee', title:'Branch Staff – Nashik', avatar:'PD', upn:'nashik@godavariurban.onmicrosoft.com'},
-  {id:'u_emp2', name:'Suresh Patil', role:'Employee', title:'Branch Staff – Nashik', avatar:'SP', upn:'nashik@godavariurban.onmicrosoft.com'},
-  {id:'u_mgr3', name:'Vikas Kulkarni', role:'Manager', title:'Branch Manager – Pune', avatar:'VK', upn:'pune@godavariurban.onmicrosoft.com'},
-  {id:'u_emp3', name:'Meena Joshi', role:'Employee', title:'Branch Staff – Pune', avatar:'MJ', upn:'pune@godavariurban.onmicrosoft.com'},
-  {id:'u_mgr2', name:'Ravi Hegde', role:'Manager', title:'Branch Manager – Bengaluru', avatar:'RH', upn:'blr@godavariurban.onmicrosoft.com'},
-  {id:'u_emp4', name:'Kavita Naik', role:'Employee', title:'Branch Staff – Bengaluru', avatar:'KN', upn:'blr@godavariurban.onmicrosoft.com'},
-  {id:'u_mgr4', name:'Ganesh Pawar', role:'Manager', title:'Branch Manager – Hubli', avatar:'GP', upn:'hubli@godavariurban.onmicrosoft.com'},
-  {id:'u_emp5', name:'Deepak Rao', role:'Employee', title:'Recovery Officer – Hubli', avatar:'DR', upn:'hubli@godavariurban.onmicrosoft.com'},
-  {id:'u_mgr5', name:'Sunita Deshpande', role:'Manager', title:'Branch Manager – Aurangabad', avatar:'SD', upn:'aurangabad@godavariurban.onmicrosoft.com'},
-  {id:'u_emp6', name:'Rahul Jadhav', role:'Employee', title:'Branch Staff – Aurangabad', avatar:'RJ', upn:'aurangabad@godavariurban.onmicrosoft.com'},
-  {id:'u_mgr6', name:'Manjunath Rao', role:'Manager', title:'Branch Manager – Mysuru', avatar:'MR', upn:'mysuru@godavariurban.onmicrosoft.com'},
-  {id:'u_emp7', name:'Ashwini Bhat', role:'Employee', title:'Branch Staff – Mysuru', avatar:'AB', upn:'mysuru@godavariurban.onmicrosoft.com'},
-];
-let currentUserId = 'u_emp1';
+/* Nothing here is hardcoded any more. USERS, BRANCHES and GROUPS start empty and
+   are built entirely from the real EmployeeDirectory SharePoint list once someone
+   signs in (see fetchAllEmployees + rebuildBranchesAndGroups below). Messages,
+   approvals, positions etc. also start empty — this is a clean install, ready for
+   real data entry, not a demo. */
+let USERS = [];
+let currentUserId = null;
 
-/* Branch master list — the real source of truth. Add a row here and the branch's
-   position-group chat + row on the Bank Positions dashboard are both generated
-   automatically. No manual group-building required, whether there are 6 branches
-   or 600. */
-const BRANCHES = [
-  {id:'br_nsk', name:'Nashik', region:'Maharashtra', managerId:'u_mgr1', staffIds:['u_emp1','u_emp2']},
-  {id:'br_pun', name:'Pune',   region:'Maharashtra', managerId:'u_mgr3', staffIds:['u_emp3']},
-  {id:'br_blr', name:'Bengaluru', region:'Karnataka', managerId:'u_mgr2', staffIds:['u_emp4']},
-  {id:'br_hbl', name:'Hubli', region:'Karnataka', managerId:'u_mgr4', staffIds:['u_emp5']},
-  {id:'br_aur', name:'Aurangabad', region:'Maharashtra', managerId:'u_mgr5', staffIds:['u_emp6']},
-  {id:'br_mys', name:'Mysuru', region:'Karnataka', managerId:'u_mgr6', staffIds:['u_emp7']},
-];
-/* Fixed Head Office reps who sit in every branch position group */
-const HO_REP_IDS = ['u_md','u_hr'];
-
+/* Branch roster — rebuilt automatically from USERS[].branch every time the
+   directory syncs. Add a person to a branch in EmployeeDirectory and their
+   branch's position-group chat is generated automatically — no manual group
+   building required, whether there are 6 branches or 600. */
+let BRANCHES = [];
 function branchOfUser(uid){
   return BRANCHES.find(b=>b.managerId===uid || b.staffIds.includes(uid));
 }
 function branchGroupId(b){ return 'g_branch_'+b.id; }
+function slugify(s){ return (s||'branch').toString().toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_+|_+$/g,'') || 'branch'; }
 function buildBranchGroups(){
+  const hoReps = USERS.filter(u=>u.role==='Higher Authority').map(u=>u.id);
   return BRANCHES.map(b=>({
     id: branchGroupId(b),
     name: b.name+' – Position Group',
     type: 'branch',
     postRestricted:false,
-    sub: 'Branch position group · '+b.region,
+    sub: 'Branch position group'+(b.region?' · '+b.region:''),
     branchId: b.id,
-    memberIds: [...HO_REP_IDS, b.managerId, ...b.staffIds]
+    memberIds: [...new Set([...hoReps, b.managerId, ...b.staffIds].filter(Boolean))]
   }));
 }
 
-let GROUPS = [
-  {id:'g_all', name:'Godavari – All Employees', type:'broadcast', postRestricted:true, sub:'Org-wide circulars & orders',
-    memberIds: USERS.map(u=>u.id)},
-  {id:'g_celeb', name:'Celebrations 🎉', type:'celebration', postRestricted:false, sub:'Birthdays, wishes, good news',
-    memberIds: USERS.map(u=>u.id)},
-  {id:'g_mgrs', name:'Branch Managers', type:'branch', postRestricted:false, sub:'Manager cadre',
-    memberIds: ['u_md','u_hr','u_mgr1','u_mgr2','u_mgr3','u_mgr4','u_mgr5','u_mgr6']},
-  ...buildBranchGroups(),
-];
+let GROUPS = [];
 function groupMemberCount(g){ return g.memberIds.length; }
 let customGroupCounter = 0;
+let savedGroupMembers = {}; // manual member-list overrides saved previously, re-applied after each rebuild
+
+/* Rebuilds BRANCHES and the base GROUPS from whatever is currently in USERS.
+   Called right after the directory syncs (on login and on manual refresh) so
+   branches/groups reflect real EmployeeDirectory data, growing automatically
+   as more of the 1000+ employees are added / sign in. */
+function rebuildBranchesAndGroups(){
+  const byBranch = {};
+  USERS.forEach(u=>{
+    const key = (u.branch||'Unassigned').trim() || 'Unassigned';
+    byBranch[key] = byBranch[key] || [];
+    byBranch[key].push(u);
+  });
+  BRANCHES = Object.keys(byBranch).sort().map(name=>{
+    const staff = byBranch[name];
+    const manager = staff.find(u=>u.role==='Manager') || null;
+    return {
+      id: 'br_'+slugify(name),
+      name,
+      region: '',
+      managerId: manager ? manager.id : null,
+      staffIds: staff.filter(u=>u.role==='Employee').map(u=>u.id)
+    };
+  });
+  const hoIds = USERS.filter(u=>u.role==='Higher Authority').map(u=>u.id);
+  const mgrIds = USERS.filter(u=>u.role==='Manager').map(u=>u.id);
+  const baseGroups = [
+    {id:'g_all', name:'Godavari – All Employees', type:'broadcast', postRestricted:true, sub:'Org-wide circulars & orders',
+      memberIds: USERS.map(u=>u.id)},
+    {id:'g_celeb', name:'Celebrations 🎉', type:'celebration', postRestricted:false, sub:'Birthdays, wishes, good news',
+      memberIds: USERS.map(u=>u.id)},
+    {id:'g_mgrs', name:'Branch Managers', type:'branch', postRestricted:false, sub:'Manager cadre',
+      memberIds: [...hoIds, ...mgrIds]},
+  ];
+  GROUPS = [...baseGroups, ...buildBranchGroups(), ...customGroups];
+  GROUPS.forEach(g=>{ if(savedGroupMembers[g.id]) g.memberIds = savedGroupMembers[g.id]; });
+  if(!GROUPS.find(g=>g.id===activeGroupId)) activeGroupId = 'g_all';
+}
 
 let activeGroupId = 'g_all';
 let activeTab = 'all';
 
-const STORE_MSG_KEY = 'gc_messages_v1';
-const STORE_APPROVAL_KEY = 'gc_approvals_v1';
-let messages = {};   // groupId -> array
-let approvals = [];  // list
+let messages = {};   // groupId -> array, starts empty — real conversations only
+let approvals = [];  // starts empty — real approval requests only
 let reactions = {};  // messageId -> {emoji: [userIds]}
-let positions = [];  // daily bank position submissions: {id, branchId, uid, opening, collected, disbursed, closing, remarks, time}
+let positions = [];  // daily bank position submissions
 let customGroups = []; // groups created in-app by Higher Authority / HR
-let lastSeen = {}; // lastSeen[uid][groupId] = timestamp -> drives WhatsApp-style unread badges on the group itself
-
-function seedDefaults(){
-  messages = {
-    g_all: [
-      {id:'m1', uid:'u_md', text:'Circular: All branches to submit Q1 recovery report by 5th July. Format attached on SharePoint.', type:'circular', time:nowMinus(120)},
-      {id:'m2', uid:'u_hr', text:'Reminder: Half-yearly KYC refresher training, 3rd July, 11 AM, all branch staff to join via Teams link shared in branch groups.', type:'circular', time:nowMinus(80)},
-    ],
-    g_celeb: [
-      {id:'m3', uid:'u_hr', text:'🎂 Wishing Priya Deshmukh (Nashik Branch) a very happy birthday today! Wish her well 🎉', type:'normal', time:nowMinus(200)},
-    ],
-    g_branch_br_nsk: [
-      {id:'m4', uid:'u_mgr1', text:'Team, please update the cash position sheet by EOD today.', type:'normal', time:nowMinus(60)},
-      {id:'m5', uid:'u_emp1', text:'Sure sir, will update by 6 PM.', type:'normal', time:nowMinus(55)},
-    ],
-    g_mgrs: [
-      {id:'m6', uid:'u_mgr1', text:'Sending loan file approval request for review — check Approvals panel.', type:'normal', time:nowMinus(30)},
-    ],
-  };
-  approvals = [
-    {id:'ap1', type:'Loan Sanction', title:'Loan sanction - A. Kumar - Branch 14', amount:'₹3,50,000', branch:'Nashik Branch', details:'Gold loan renewal, existing customer, 3 yr clean repayment history.', requestedBy:'u_mgr1', status:'pending', time:nowMinus(40)},
-    {id:'ap2', type:'Cash Transfer', title:'Bulk cash transfer - Nashik to Pune Treasury', amount:'₹12,00,000', branch:'Nashik Branch', details:'Monthly surplus transfer as per treasury schedule.', requestedBy:'u_mgr1', status:'approved', approvedBy:'u_md', time:nowMinus(300)},
-  ];
-  reactions = {'m1':{'👍':['u_mgr1','u_emp1']}, 'm2':{'👍':['u_emp1']}};
-  positions = [
-    {id:'pos1', branchId:'br_nsk', uid:'u_emp1', opening:'8,40,000', collected:'2,10,000', disbursed:'1,35,000', closing:'9,15,000', remarks:'Normal day, no cash-in-transit pending.', time:nowMinus(180)},
-    {id:'pos2', branchId:'br_blr', uid:'u_mgr2', opening:'6,20,000', collected:'95,000', disbursed:'3,40,000', closing:'3,75,000', remarks:'Two gold loan disbursements completed.', time:nowMinus(200)},
-  ];
-}
+let lastSeen = {};   // lastSeen[uid][groupId] = timestamp -> WhatsApp-style unread badges
+let passwordResetRequests = []; // {id, employeeId, name, branch, time} — raised via "Forgot password?"
 function nowMinus(mins){ return Date.now() - mins*60000; }
 
 async function loadData(){
   try{
     const r = await window.storage.get('gc_state', true);
     const parsed = JSON.parse(r.value);
-    messages = parsed.messages; approvals = parsed.approvals; reactions = parsed.reactions;
+    messages = parsed.messages || {};
+    approvals = parsed.approvals || [];
+    reactions = parsed.reactions || {};
     positions = parsed.positions || [];
     customGroups = parsed.customGroups || [];
     lastSeen = parsed.lastSeen || {};
-    GROUPS = [...GROUPS, ...customGroups];
-    if(parsed.groupMembers){
-      GROUPS.forEach(g=>{ if(parsed.groupMembers[g.id]) g.memberIds = parsed.groupMembers[g.id]; });
-    }
+    passwordResetRequests = parsed.passwordResetRequests || [];
+    savedGroupMembers = parsed.groupMembers || {};
   }catch(e){
-    seedDefaults();
-    await saveData();
+    messages = {}; approvals = []; reactions = {}; positions = [];
+    customGroups = []; lastSeen = {}; passwordResetRequests = []; savedGroupMembers = {};
   }
   ensureLastSeenInit();
 }
@@ -863,7 +890,7 @@ async function saveData(){
   try{
     const groupMembers = {};
     GROUPS.forEach(g=>{ groupMembers[g.id] = g.memberIds; });
-    await window.storage.set('gc_state', JSON.stringify({messages, approvals, reactions, positions, customGroups, groupMembers, lastSeen}), true);
+    await window.storage.set('gc_state', JSON.stringify({messages, approvals, reactions, positions, customGroups, groupMembers, lastSeen, passwordResetRequests}), true);
   }catch(e){ console.error('save failed', e); }
 }
 
@@ -877,15 +904,12 @@ function fmtTime(ts){
 }
 function initialsColor(id){ return id; }
 
-/* ============ ROLE SWITCH (for demo) ============ */
-function populateRoleSelect(){
-  const sel = document.getElementById('roleSelect');
-  sel.innerHTML = USERS.map(u=>`<option value="${u.id}">${u.name} — ${u.title}</option>`).join('');
-  sel.value = currentUserId;
-}
-function switchUser(){
-  currentUserId = document.getElementById('roleSelect').value;
-  renderAll();
+/* ============ CURRENT USER CHIP (real signed-in identity, no more "viewing as" demo switch) ============ */
+function renderCurrentUserChip(){
+  const chip = document.getElementById('currentUserChip');
+  if(!chip) return;
+  const u = getUser(currentUserId);
+  chip.innerHTML = u ? `<span class="dot-live"></span><span>${escapeHtml(u.name)} · ${escapeHtml(u.role)}</span>` : '';
 }
 
 /* ============ UNREAD TRACKING (shown inline on the group itself, WhatsApp-style) ============ */
@@ -1287,6 +1311,17 @@ function renderRightPanel(){
     html += `<button class="new-approval-btn" onclick="openModal()">+ New Approval Request</button>`;
   }
 
+  if(canDecide && passwordResetRequests.length>0){
+    html += `<div style="font-size:11.5px;font-weight:700;color:var(--muted);margin:14px 0 6px;">🔑 PASSWORD RESET REQUESTS</div>`;
+    html += passwordResetRequests.map(r=>`
+      <div class="approval-card pending">
+        <div class="approval-title">${escapeHtml(r.name||'')}</div>
+        <div class="approval-detail">${escapeHtml(r.employeeId||'')} · ${escapeHtml(r.branch||'')}</div>
+        <div class="approval-detail">${fmtTime(r.time)}</div>
+        <div class="approval-actions"><button class="btn-mini btn-approve" onclick="approvePasswordReset('${r.id}')">Reset Password</button></div>
+      </div>`).join('');
+  }
+
   const visibleApprovals = canDecide ? approvals : approvals.filter(a=>a.requestedBy===currentUserId);
   const sorted = [...visibleApprovals].sort((a,b)=>b.time-a.time);
   const pendingCount = visibleApprovals.filter(a=>a.status==='pending').length;
@@ -1529,7 +1564,7 @@ function openCreateGroup(){
   document.getElementById('ngName').value='';
   document.getElementById('ngType').value='branch';
   document.getElementById('ngMemberSearch').value='';
-  ngSelected = new Set(['u_md','u_hr']); // HO reps default in
+  ngSelected = new Set(USERS.filter(u=>u.role==='Higher Authority').map(u=>u.id)); // HO reps default in
   renderNewGroupMemberList();
   document.getElementById('createGroupModal').classList.add('show');
 }
@@ -1670,16 +1705,18 @@ function recordPosition(branchId, vals){
 
 /* ============ AUTH: STEP 1 — SIGN IN WITH MICROSOFT ============ */
 let msalInstance = null;
-let matchedEmployees = []; // rows from EmployeeDirectory matching the signed-in UPN
-let selectedWhoamiId = null;
+let matchedEmployees = []; // rows from EmployeeDirectory tied to the signed-in UPN
+let pendingRow = null;     // employee row matched by Employee ID, awaiting password step
+let authStage = 'code';    // 'code' | 'password' | 'setpassword'
 
 function showAuthError(elId, msg){
   const el = document.getElementById(elId);
   el.textContent = msg; el.style.display = 'block';
 }
+function hideAuthError(elId){ document.getElementById(elId).style.display = 'none'; }
 
 async function signInWithMicrosoft(){
-  showAuthError('authError',''); document.getElementById('authError').style.display='none';
+  hideAuthError('authError');
   if(typeof msal === 'undefined'){
     showAuthError('authError','Sign-in couldn\u2019t load. This usually means a firewall, antivirus, or browser extension on this device is blocking a required Microsoft script. Try a different network/browser, or ask IT to allow cdn.jsdelivr.net.');
     return;
@@ -1695,7 +1732,7 @@ async function signInWithMicrosoft(){
     });
     await msalInstance.initialize(); // required in MSAL.js v3 before any other API call
     const result = await msalInstance.loginPopup({
-      scopes: ['User.Read', 'Sites.ReadWrite.All', 'ChannelMessage.Send', 'Chat.ReadWrite']
+      scopes: ['User.Read', 'Sites.ReadWrite.All', 'ChannelMessage.Send', 'Chat.ReadWrite', 'OnlineMeetings.ReadWrite', 'Calendars.ReadWrite']
     });
     const upn = result.account.username; // e.g. nagpur@godavariurban.onmicrosoft.com
     await identifyEmployeeByUPN(upn);
@@ -1705,7 +1742,7 @@ async function signInWithMicrosoft(){
   }
 }
 
-/* ============ AUTH: fetch EmployeeDirectory rows matching this M365 login ============ */
+/* ============ AUTH: fetch EmployeeDirectory rows tied to this M365 login ============ */
 async function identifyEmployeeByUPN(upn){
   document.getElementById('authStep1').style.display = 'none';
   document.getElementById('authLoading').style.display = 'flex';
@@ -1722,12 +1759,11 @@ async function identifyEmployeeByUPN(upn){
     } else if(activeRows.length === 0){
       document.getElementById('authStep1').style.display = 'flex';
       showAuthError('authError','No employee record found for '+upn+' in the Employee Directory. Ask HR to add you.');
-    } else if(activeRows.length === 1){
-      // Not a shared login — only one active employee tied to this UPN, sign straight in.
-      finishLogin(activeRows[0]);
     } else {
-      // Shared branch login — ask "who are you" and confirm with a personal PIN.
-      openWhoamiStep(activeRows);
+      // Every sign-in — shared branch login or not — always confirms with the
+      // employee's own Employee ID + password next, WhatsApp-style.
+      openCodeStep(activeRows);
+      syncFullDirectory(); // background sync of the whole org, not just this branch
     }
   }catch(err){
     console.error(err);
@@ -1737,18 +1773,24 @@ async function identifyEmployeeByUPN(upn){
   }
 }
 
-/* Calls Microsoft Graph to read the EmployeeDirectory SharePoint list, filtered to
-   rows whose M365UPN matches the signed-in account. Uses $select so only the columns
-   this app needs are ever pulled over the wire. */
+/* Calls Microsoft Graph to read the EmployeeDirectory SharePoint list. Pass a UPN to
+   filter to one branch's login; call with no argument to pull the full active roster
+   (paged via @odata.nextLink) — that's what keeps USERS/BRANCHES/GROUPS real instead
+   of hardcoded. Uses $select so only the columns this app needs are ever pulled. */
 async function fetchEmployeeDirectory(upn){
   const token = await getGraphToken();
-  const url = `https://graph.microsoft.com/v1.0/sites/${APP_CONFIG.siteId}/lists/${APP_CONFIG.employeeListId}/items`
-    + `?$expand=fields($select=Title,EmployeeID,FullName,Branch,Role,M365UPN,Status)`
-    + `&$filter=fields/M365UPN eq '${upn}'`;
-  const resp = await fetch(url, { headers: { Authorization: 'Bearer ' + token } });
-  if(!resp.ok) throw new Error('Graph request failed: ' + resp.status);
-  const data = await resp.json();
-  return (data.value || []).map(item => item.fields);
+  let url = `https://graph.microsoft.com/v1.0/sites/${APP_CONFIG.siteId}/lists/${APP_CONFIG.employeeListId}/items`
+    + `?$expand=fields($select=Title,EmployeeID,FullName,Branch,Role,M365UPN,Status)&$top=200`;
+  if(upn) url += `&$filter=fields/M365UPN eq '${upn}'`;
+  let rows = [];
+  while(url){
+    const resp = await fetch(url, { headers: { Authorization: 'Bearer ' + token } });
+    if(!resp.ok) throw new Error('Graph request failed: ' + resp.status);
+    const data = await resp.json();
+    rows = rows.concat((data.value || []).map(item => item.fields));
+    url = data['@odata.nextLink'] || null;
+  }
+  return rows;
 }
 
 async function getGraphToken(){
@@ -1759,64 +1801,176 @@ async function getGraphToken(){
   return result.accessToken;
 }
 
-/* ============ AUTH: STEP 2 — WHICH EMPLOYEE (shared login case) ============ */
-function openWhoamiStep(rows){
-  document.getElementById('authStep2').style.display = 'flex';
-  document.getElementById('whoamiBranch').textContent =
-    (rows[0].Branch || 'This branch') + ' — this login is shared. Tap your name.';
-  document.getElementById('whoamiList').innerHTML = rows.map(r => `
-    <div class="whoami-row" data-id="${r.EmployeeID}" onclick="selectWhoami('${r.EmployeeID}')">
-      <div class="whoami-avatar">${(r.FullName||'?').split(' ').map(s=>s[0]).slice(0,2).join('')}</div>
-      <div>
-        <div class="whoami-name">${r.FullName}</div>
-        <div class="whoami-title">${r.Role || ''} · ${r.EmployeeID}</div>
-      </div>
-    </div>`).join('');
-  selectedWhoamiId = null;
-  document.getElementById('whoamiPin').style.display = 'none';
-  document.getElementById('whoamiPin').value = '';
-  document.getElementById('whoamiConfirm').disabled = true;
+/* Pulls the FULL active EmployeeDirectory (every branch) and rebuilds
+   USERS/BRANCHES/GROUPS from it — this is the real "connected to SharePoint"
+   sync, reflected by the badge in the topbar. */
+async function syncFullDirectory(){
+  setSyncBadge('checking');
+  try{
+    const all = await fetchEmployeeDirectory();
+    const active = all.filter(r => (r.Status||'').trim().toLowerCase()==='active');
+    USERS = active.map(rowToUser);
+    if(currentUserId && !USERS.find(u=>u.id===currentUserId) && pendingRow) USERS.push(rowToUser(pendingRow));
+    rebuildBranchesAndGroups();
+    setSyncBadge('ok');
+    if(currentUserId) renderAll();
+  }catch(err){
+    console.error(err);
+    setSyncBadge('bad');
+  }
 }
-function selectWhoami(employeeId){
-  selectedWhoamiId = employeeId;
-  document.querySelectorAll('.whoami-row').forEach(r=>r.classList.toggle('selected', r.dataset.id===employeeId));
-  document.getElementById('whoamiPin').style.display = 'block';
-  document.getElementById('whoamiConfirm').disabled = false;
-}
-async function confirmIdentity(){
-  const pin = document.getElementById('whoamiPin').value.trim();
-  const row = matchedEmployees.find(r => r.EmployeeID === selectedWhoamiId);
-  document.getElementById('whoamiError').style.display = 'none';
-  if(!row){ showAuthError('whoamiError','Pick your name first.'); return; }
-  if(pin.length < 4){ showAuthError('whoamiError','Enter your PIN to confirm it\u2019s you.'); return; }
-  // TODO: verify `pin` against a hashed PIN stored per employee (never the plaintext
-  // Master Data Userpassword column) — e.g. a small "AppPin" list keyed by EmployeeID,
-  // checked via a Power Automate HTTP-trigger flow or Azure Function so the hash/check
-  // never happens in client-side JS. Placeholder accepts any 4+ digit entry for preview.
-  finishLogin(row);
+function retrySync(){ if(msalInstance) syncFullDirectory(); }
+function setSyncBadge(state){
+  const el = document.getElementById('syncBadge');
+  if(!el) return;
+  el.className = 'sync-badge '+state;
+  el.textContent = state==='ok' ? '🟢 Synced with SharePoint' : state==='bad' ? '🔴 Not synced — tap to retry' : '⏳ Checking…';
 }
 
-/* ============ AUTH: finish — build the app's user record and enter the app ============ */
+function rowToUser(row){
+  return {
+    id: 'emp_' + row.EmployeeID,
+    name: row.FullName,
+    role: mapDesignationToRole(row.Role),
+    title: (row.Role || 'Staff') + (row.Branch ? ' – '+row.Branch : ''),
+    avatar: (row.FullName||'?').split(' ').map(s=>s[0]).slice(0,2).join(''),
+    upn: row.M365UPN,
+    employeeId: row.EmployeeID,
+    branch: row.Branch,
+  };
+}
 function mapDesignationToRole(designationOrRole){
   const s = (designationOrRole || '').toLowerCase();
   if(s.includes('managing director') || s.includes('general manager') || s.includes(' hr') || s.startsWith('hr')) return 'Higher Authority';
   if(s.includes('manager')) return 'Manager';
   return 'Employee';
 }
+
+/* ============ AUTH: STEP 2 — EMPLOYEE ID + PASSWORD (WhatsApp-style) ============ */
+function openCodeStep(rows){
+  authStage = 'code'; pendingRow = null;
+  document.getElementById('authStep2').style.display = 'flex';
+  document.getElementById('whoamiTitle').textContent = 'Enter your Employee ID';
+  document.getElementById('whoamiBranch').textContent =
+    (rows[0].Branch || 'This branch') + (rows.length > 1 ? ' — shared login, enter your own Employee ID.' : '');
+  document.getElementById('whoamiOkNote').style.display = 'none';
+  hideAuthError('whoamiError');
+  const code = document.getElementById('whoamiCode');
+  code.style.display = 'block'; code.value = ''; code.disabled = false;
+  const p1 = document.getElementById('whoamiPin'), p2 = document.getElementById('whoamiPin2');
+  p1.style.display = 'none'; p1.value = '';
+  p2.style.display = 'none'; p2.value = '';
+  document.getElementById('forgotPwBtn').style.display = 'none';
+  document.getElementById('whoamiConfirm').textContent = 'Continue';
+}
+function backToStep1(){
+  document.getElementById('authStep2').style.display = 'none';
+  document.getElementById('authStep1').style.display = 'flex';
+}
+async function confirmIdentity(){
+  hideAuthError('whoamiError');
+  if(authStage === 'code'){
+    const code = document.getElementById('whoamiCode').value.trim();
+    if(!code){ showAuthError('whoamiError','Enter your Employee ID.'); return; }
+    const row = matchedEmployees.find(r => (r.EmployeeID||'').toLowerCase() === code.toLowerCase());
+    if(!row){ showAuthError('whoamiError','That Employee ID isn\u2019t linked to this Microsoft login. Check with your Branch Manager or HR.'); return; }
+    pendingRow = row;
+    document.getElementById('whoamiCode').disabled = true;
+    const hasPw = await hasStoredPassword(row.EmployeeID);
+    if(hasPw){
+      authStage = 'password';
+      document.getElementById('whoamiTitle').textContent = 'Enter your password';
+      const p1 = document.getElementById('whoamiPin');
+      p1.style.display = 'block'; p1.placeholder = 'Password'; p1.value = '';
+      document.getElementById('forgotPwBtn').style.display = 'block';
+      document.getElementById('whoamiConfirm').textContent = 'Log In';
+    } else {
+      authStage = 'setpassword';
+      document.getElementById('whoamiTitle').textContent = 'Set a password for your account';
+      document.getElementById('whoamiOkNote').style.display = 'block';
+      document.getElementById('whoamiOkNote').textContent = 'First time here — create a password you\u2019ll use next time, like on WhatsApp.';
+      const p1 = document.getElementById('whoamiPin'), p2 = document.getElementById('whoamiPin2');
+      p1.style.display = 'block'; p1.placeholder = 'New password (min 4 characters)'; p1.value = '';
+      p2.style.display = 'block'; p2.value = '';
+      document.getElementById('whoamiConfirm').textContent = 'Set Password & Continue';
+    }
+    return;
+  }
+  if(authStage === 'password'){
+    const pw = document.getElementById('whoamiPin').value;
+    if(!pw){ showAuthError('whoamiError','Enter your password.'); return; }
+    const ok = await verifyStoredPassword(pendingRow.EmployeeID, pw);
+    if(!ok){ showAuthError('whoamiError','Incorrect password. Tap "Forgot password?" if you need it reset.'); return; }
+    finishLogin(pendingRow);
+    return;
+  }
+  if(authStage === 'setpassword'){
+    const pw = document.getElementById('whoamiPin').value;
+    const pw2 = document.getElementById('whoamiPin2').value;
+    if(pw.length < 4){ showAuthError('whoamiError','Password must be at least 4 characters.'); return; }
+    if(pw !== pw2){ showAuthError('whoamiError','Passwords don\u2019t match.'); return; }
+    await setStoredPassword(pendingRow.EmployeeID, pw);
+    finishLogin(pendingRow);
+    return;
+  }
+}
+
+/* ============ PASSWORD STORAGE ============
+   Stored as a SHA-256 hash, never plaintext, and never read from the Master
+   Data "Userpassword" column. For a production rollout this check belongs
+   behind a server-side endpoint (Power Automate HTTP trigger / Azure
+   Function) rather than in client JS — this hashed, storage-backed version
+   is the working version until that endpoint exists. */
+async function hashPassword(pw){
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('gc_salt_v1:'+pw));
+  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+async function hasStoredPassword(employeeId){
+  try{ const r = await window.storage.get('pw_'+employeeId, true); return !!(r && r.value); }
+  catch(e){ return false; }
+}
+async function verifyStoredPassword(employeeId, pw){
+  try{
+    const r = await window.storage.get('pw_'+employeeId, true);
+    if(!r || !r.value) return false;
+    return r.value === await hashPassword(pw);
+  }catch(e){ return false; }
+}
+async function setStoredPassword(employeeId, pw){
+  await window.storage.set('pw_'+employeeId, await hashPassword(pw), true);
+}
+
+/* ============ FORGOT PASSWORD ============ */
+async function requestPasswordReset(){
+  if(!pendingRow) return;
+  passwordResetRequests = passwordResetRequests.filter(r=>r.employeeId!==pendingRow.EmployeeID);
+  passwordResetRequests.push({
+    id:'pwr_'+Date.now(), employeeId: pendingRow.EmployeeID, name: pendingRow.FullName,
+    branch: pendingRow.Branch, time: Date.now()
+  });
+  await saveData();
+  document.getElementById('whoamiOkNote').style.display = 'block';
+  document.getElementById('whoamiOkNote').textContent = 'Reset request sent to HR / Head Office. They\u2019ll clear your password so you can set a new one.';
+  hideAuthError('whoamiError');
+}
+/* Higher Authority / HR action from the Approvals panel — clears the stored
+   hash so the employee is prompted to set a fresh password on next login. */
+async function approvePasswordReset(reqId){
+  const req = passwordResetRequests.find(r=>r.id===reqId);
+  if(!req) return;
+  try{ await window.storage.delete('pw_'+req.employeeId, true); }catch(e){}
+  passwordResetRequests = passwordResetRequests.filter(r=>r.id!==reqId);
+  await saveData();
+  renderRightPanel();
+  alert(req.name+' can now set a new password next time they log in.');
+}
+
+/* ============ AUTH: finish — enter the app ============ */
 function finishLogin(row){
-  const uid = 'emp_' + row.EmployeeID;
-  const user = {
-    id: uid,
-    name: row.FullName,
-    role: mapDesignationToRole(row.Role),
-    title: (row.Role || 'Staff') + ' – ' + (row.Branch || ''),
-    avatar: (row.FullName||'?').split(' ').map(s=>s[0]).slice(0,2).join(''),
-    upn: row.M365UPN,
-    employeeId: row.EmployeeID,
-    branch: row.Branch,
-  };
-  if(!USERS.find(u=>u.id===uid)) USERS.push(user);
-  currentUserId = uid;
+  const user = rowToUser(row);
+  if(!USERS.find(u=>u.id===user.id)) USERS.push(user);
+  currentUserId = user.id;
+  rebuildBranchesAndGroups();
   document.getElementById('authStep1').style.display = 'none';
   document.getElementById('authStep2').style.display = 'none';
   document.getElementById('authLoading').style.display = 'none';
@@ -1825,9 +1979,86 @@ function finishLogin(row){
   renderAll();
 }
 
+/* ============ LOGOUT ============ */
+function confirmLogout(){ document.getElementById('logoutModal').classList.add('show'); }
+function closeLogoutModal(){ document.getElementById('logoutModal').classList.remove('show'); }
+async function doLogout(){
+  closeLogoutModal();
+  try{
+    if(msalInstance){
+      const account = msalInstance.getAllAccounts()[0];
+      if(account) await msalInstance.logoutPopup({ account });
+    }
+  }catch(e){ console.error(e); }
+  location.reload(); // simplest, reliable reset of all in-memory app state
+}
+
+/* ============ TEAMS MEETINGS (Higher Authority / HR only) ============ */
+function renderMeetingButton(){
+  const wrap = document.getElementById('meetingBtnWrap');
+  if(!wrap) return;
+  wrap.innerHTML = isHigherAuthority(currentUserId)
+    ? `<button class="meeting-btn" onclick="openMeetingModal()">📅 New Teams Meeting</button>` : '';
+}
+function openMeetingModal(){
+  document.getElementById('mtSubject').value = '';
+  document.getElementById('mtDate').value = '';
+  document.getElementById('mtTime').value = '';
+  document.getElementById('mtDuration').value = '30';
+  document.getElementById('mtGroup').innerHTML = GROUPS.map(g=>`<option value="${g.id}">${escapeHtml(g.name)}</option>`).join('');
+  document.getElementById('meetingError').style.display = 'none';
+  document.getElementById('meetingModal').classList.add('show');
+}
+function closeMeetingModal(){ document.getElementById('meetingModal').classList.remove('show'); }
+async function submitMeeting(){
+  const subject = document.getElementById('mtSubject').value.trim();
+  const date = document.getElementById('mtDate').value;
+  const time = document.getElementById('mtTime').value;
+  const duration = parseInt(document.getElementById('mtDuration').value, 10) || 30;
+  const groupId = document.getElementById('mtGroup').value;
+  const errEl = document.getElementById('meetingError');
+  errEl.style.display = 'none';
+  if(!subject || !date || !time){ errEl.textContent = 'Fill in the subject, date and time.'; errEl.style.display = 'block'; return; }
+  const start = new Date(date+'T'+time+':00');
+  const end = new Date(start.getTime() + duration*60000);
+  try{
+    const account = msalInstance.getAllAccounts()[0];
+    let token;
+    try{ token = (await msalInstance.acquireTokenSilent({ scopes:['OnlineMeetings.ReadWrite'], account })).accessToken; }
+    catch(e){ token = (await msalInstance.acquireTokenPopup({ scopes:['OnlineMeetings.ReadWrite'] })).accessToken; }
+    const resp = await fetch('https://graph.microsoft.com/v1.0/me/onlineMeetings', {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json', Authorization:'Bearer '+token },
+      body: JSON.stringify({ startDateTime: start.toISOString(), endDateTime: end.toISOString(), subject })
+    });
+    if(!resp.ok) throw new Error('Graph request failed: '+resp.status);
+    const meeting = await resp.json();
+    postMeetingMessage(groupId, subject, start, meeting.joinWebUrl);
+    closeMeetingModal();
+    window.open(meeting.joinWebUrl, '_blank');
+  }catch(err){
+    console.error(err);
+    errEl.textContent = 'Couldn\u2019t create the Teams meeting. Make sure OnlineMeetings.ReadWrite has admin consent in Azure AD, then try again.';
+    errEl.style.display = 'block';
+  }
+}
+function postMeetingMessage(groupId, subject, start, joinUrl){
+  const g = GROUPS.find(x=>x.id===groupId);
+  if(!g) return;
+  messages[groupId] = messages[groupId] || [];
+  messages[groupId].push({
+    id:'m_'+Date.now(), uid: currentUserId, type:'circular', time: Date.now(),
+    text: `📅 Teams Meeting scheduled: "${subject}" on ${start.toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'})}.\nJoin: ${joinUrl}`
+  });
+  saveData();
+  if(activeGroupId===groupId) renderChat();
+  renderGroupList();
+}
+
 /* ============ INIT ============ */
 async function renderAll(){
-  populateRoleSelect();
+  renderCurrentUserChip();
+  renderMeetingButton();
   renderNewGroupButton();
   renderGroupList();
   renderChat();
