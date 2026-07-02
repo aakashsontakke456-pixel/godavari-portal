@@ -7,7 +7,7 @@
 <!-- MSAL.js — handles the "Sign in with Microsoft" step against your Azure AD app.
      Requires this page's exact deployed URL to be registered as a Redirect URI
      (SPA platform) on the Godavari Internal App registration. -->
-<script src="https://alcdn.msauth.net/browser/3.14.0/js/msal-browser.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@3.14.0/lib/msal-browser.min.js"></script>
 <style>
   :root{
     --teal-dark:#0b3d36;
@@ -1681,7 +1681,7 @@ function showAuthError(elId, msg){
 async function signInWithMicrosoft(){
   showAuthError('authError',''); document.getElementById('authError').style.display='none';
   if(typeof msal === 'undefined'){
-    showAuthError('authError','Microsoft sign-in library did not load — check your internet connection and try again.');
+    showAuthError('authError','Sign-in couldn\u2019t load. This usually means a firewall, antivirus, or browser extension on this device is blocking a required Microsoft script. Try a different network/browser, or ask IT to allow cdn.jsdelivr.net.');
     return;
   }
   try{
