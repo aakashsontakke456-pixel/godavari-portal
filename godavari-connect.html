@@ -484,6 +484,18 @@
     }
     #positionsOverlay #positionsBody{flex:1;overflow-y:auto;padding:14px 16px;}
     #positionsOverlay .modal h3 > button.btn-cancel{display:none;}
+
+    #meetingsOverlay{background:var(--paper);align-items:stretch;justify-content:stretch;}
+    #meetingsOverlay .modal{
+      width:100% !important;max-width:100%;height:100%;max-height:100%;
+      border-radius:0;display:flex;flex-direction:column;padding:0;box-shadow:none;
+    }
+    #meetingsOverlay .modal h3{
+      padding:14px 16px;margin:0;border-bottom:1px solid var(--line);flex-shrink:0;font-size:15px;
+    }
+    #meetingsOverlay .modal h3 > button.btn-cancel{display:none;}
+    #meetingsOverlay .modal > .new-approval-btn{margin:14px 16px 0;}
+    #meetingsOverlay #meetingsBody{flex:1;overflow-y:auto;padding:14px 16px;}
   }
   @media (max-width: 380px){
     .brand-text{max-width:110px;}
@@ -811,10 +823,10 @@
   </div>
 </div>
 
-<!-- NEW TEAMS MEETING (Higher Authority / HR) -->
+<!-- NEW / EDIT TEAMS MEETING (Higher Authority / HR / Head Office) -->
 <div class="modal-overlay" id="meetingModal">
   <div class="modal" style="width:420px;">
-    <h3>📅 New Teams Meeting</h3>
+    <h3 id="meetingModalTitle">📅 New Teams Meeting</h3>
     <div class="auth-error" id="meetingError" style="display:none;"></div>
     <label>Subject</label>
     <input id="mtSubject" placeholder="e.g. Monthly Branch Review">
@@ -828,10 +840,25 @@
     <input id="mtDuration" type="number" value="30" min="15" step="15">
     <div class="modal-actions">
       <button class="btn-cancel" onclick="closeMeetingModal()">Cancel</button>
-      <button class="btn-submit" onclick="submitMeeting()">Create & Share Link</button>
+      <button class="btn-submit" id="meetingSubmitBtn" onclick="submitMeeting()">Create &amp; Share Link</button>
     </div>
   </div>
 </div>
+
+<!-- TEAMS MEETINGS DASHBOARD (Higher Authority / HR / Head Office) — every
+     meeting scheduled from the app, with Join / Edit / Cancel in one place,
+     same "tap to manage" pattern as Bank Positions and Approvals. -->
+<div class="modal-overlay" id="meetingsOverlay">
+  <div class="modal" style="width:min(640px,94vw);max-height:86vh;overflow-y:auto;">
+    <h3 style="display:flex;justify-content:space-between;align-items:center;">
+      <span style="display:flex;align-items:center;"><button class="chat-back-btn" onclick="closeMeetingsList()" aria-label="Back" style="margin-right:8px;">←</button>📅 Teams Meetings</span>
+      <button class="btn-cancel" style="flex:none;padding:6px 12px;" onclick="closeMeetingsList()">✕</button>
+    </h3>
+    <button class="new-approval-btn" style="margin-bottom:14px;" onclick="closeMeetingsList();openMeetingModal();">+ New Teams Meeting</button>
+    <div id="meetingsBody"></div>
+  </div>
+</div>
+
 
 <!-- HIDDEN FILE INPUTS -->
 <input type="file" id="fileInputMedia" accept="image/*,video/*" style="display:none" onchange="handleFileSelected(event)">
@@ -879,6 +906,22 @@
 
 <script>
 /* ============ CONFIG — fill these in for your tenant ============ */
+/* SETUP NOTE — Meetings list:
+   To let people edit/cancel Teams meetings (not just create them), the app
+   needs somewhere to remember which onlineMeeting belongs to which chat
+   group, same as it already does for Approvals/Positions/CustomGroups.
+   Create ONE more SharePoint list called "Meetings" on the Godavari-App-Data
+   site, with these columns, then paste its List ID into meetingsListId below
+   (Site contents > Meetings > Settings > List settings — the ID is in the URL):
+     Title              Single line of text   (meeting subject)
+     GroupId            Single line of text   (which chat this was scheduled for)
+     OrganizerId        Single line of text   (uid of who scheduled it)
+     StartDateTime      Date and Time
+     EndDateTime        Date and Time
+     JoinUrl             Multiple lines of text (plain text) — Teams join links run long
+     GraphMeetingId     Single line of text   (Microsoft Graph onlineMeeting id — needed to edit/cancel later)
+     Status             Single line of text   (Scheduled / Cancelled)
+*/
 const APP_CONFIG = {
   tenantId:   'e47e4128-1c1b-4510-a440-415145dc1cde', // Godavari Internal App > Directory (tenant) ID
   clientId:   '45845576-f5f9-4945-a1a3-ee76ca0a9dbb', // Godavari Internal App > Application (client) ID
@@ -890,6 +933,7 @@ const APP_CONFIG = {
   approvalsListId: '4f34d28e-09af-4203-916b-4d9447a5fbd4', // Approvals list
   positionsListId: '2ab0511e-dfd1-45a5-97a6-43b22d3f6f6e', // Positions list
   customGroupsListId: '0c5dee45-6a9e-432e-a79b-d375df998e49', // CustomGroups list
+  meetingsListId: 'PASTE_YOUR_MEETINGS_LIST_ID_HERE', // Meetings list — see setup note below
 };
 
 /* ============ DATA MODEL ============ */
@@ -988,6 +1032,7 @@ let approvals = [];  // starts empty — real approval requests only
 let reactions = {};  // messageId -> {emoji: [userIds]}
 let positions = [];  // daily bank position submissions
 let customGroups = []; // groups created in-app by Higher Authority / HR
+let meetings = []; // Teams meetings scheduled from the app — {id, subject, groupId, organizerUid, start, end, joinUrl, graphMeetingId, status, __itemId}
 let lastSeen = {};   // lastSeen[uid][groupId] = timestamp -> WhatsApp-style unread badges
 let passwordResetRequests = []; // {id, employeeId, name, branch, time} — raised via "Forgot password?"
 function nowMinus(mins){ return Date.now() - mins*60000; }
@@ -1040,6 +1085,8 @@ async function livePoll(){
   // even while they're already looking at the dashboard.
   const positionsOverlay = document.getElementById('positionsOverlay');
   if(positionsOverlay && positionsOverlay.classList.contains('show')) renderPositionsDashboard();
+  const meetingsOverlay = document.getElementById('meetingsOverlay');
+  if(meetingsOverlay && meetingsOverlay.classList.contains('show')) renderMeetingsDashboard();
   const msgInput2 = document.getElementById('msgInput');
   if(msgInput2){
     msgInput2.value = draft;
@@ -1066,15 +1113,16 @@ function stopLiveSync(){
    those session-only bits (and any manual member-list overrides) aren't
    wiped out every few seconds — only a real login should reset them. */
 async function loadData(isRefresh){
-  messages = {}; approvals = []; positions = []; customGroups = []; groupOverrides = {};
+  messages = {}; approvals = []; positions = []; customGroups = []; groupOverrides = {}; meetings = [];
   passwordResetRequests = [];
   if(!isRefresh){ reactions = {}; lastSeen = {}; savedGroupMembers = {}; }
   try{
-    const [msgRows, apRows, posRows, groupRows] = await Promise.all([
+    const [msgRows, apRows, posRows, groupRows, meetingRows] = await Promise.all([
       fetchAllListItems(APP_CONFIG.messagesListId, 'GroupId,SenderId,SenderName,Body,SentOn'),
       fetchAllListItems(APP_CONFIG.approvalsListId, 'Title,GroupId,RequesterId,A_Type,Details,Status,SubmittedOn'),
       fetchAllListItems(APP_CONFIG.positionsListId, 'BranchId,SubmittedBy,Data,SubmittedOn'),
       fetchAllListItems(APP_CONFIG.customGroupsListId, 'Title,Name,CG_Type,MemberIds,CreatedBy,Icon'),
+      fetchAllListItems(APP_CONFIG.meetingsListId, 'Title,GroupId,OrganizerId,StartDateTime,EndDateTime,JoinUrl,GraphMeetingId,Status').catch(e=>{ console.error('Meetings list fetch failed — check meetingsListId in APP_CONFIG', e); return []; }),
     ]);
 
     msgRows.forEach(r=>{
@@ -1133,6 +1181,17 @@ async function loadData(isRefresh){
       });
     });
 
+    meetingRows.forEach(r=>{
+      meetings.push({
+        id: 'mt_'+r.__itemId, subject: r.Title||'', groupId: r.GroupId,
+        organizerUid: r.OrganizerId, start: Date.parse(r.StartDateTime)||Date.now(),
+        end: Date.parse(r.EndDateTime)||Date.now(), joinUrl: r.JoinUrl||'',
+        graphMeetingId: r.GraphMeetingId||'', status: (r.Status||'Scheduled'),
+        __itemId: r.__itemId
+      });
+    });
+    meetings.sort((a,b)=>a.start-b.start);
+
     // Rows whose Title is a real custom-group id (created via "+ New Group") are
     // actual groups; rows for a branch's auto-generated Position Group (Title
     // 'g_branch_xxx', created via "Generate Position Groups") are ALSO real
@@ -1184,6 +1243,11 @@ function isHeadOfficeStaff(uid){
   return !!b && b.name.trim().toLowerCase() === 'head office';
 }
 function canSeeAllBranchPositions(uid){ return isHigherAuthority(uid) || isHeadOfficeStaff(uid); }
+/* Teams meeting scheduling/management: Higher Authority (HR is modelled as a
+   Higher Authority user in this app) plus anyone based at Head Office —
+   same audience as the Bank Positions org-wide view, since it's the same
+   group of people who end up organizing branch-facing calls. */
+function canManageMeetings(uid){ return isHigherAuthority(uid) || isHeadOfficeStaff(uid); }
 function fmtTime(ts){
   const d = new Date(ts);
   return d.toLocaleString('en-IN', {hour:'2-digit', minute:'2-digit', day:'2-digit', month:'short'});
@@ -2837,23 +2901,93 @@ async function doLogout(){
   location.reload(); // simplest, reliable reset of all in-memory app state
 }
 
-/* ============ TEAMS MEETINGS (Higher Authority / HR only) ============ */
+/* ============ TEAMS MEETINGS (Higher Authority / HR / Head Office) ============ */
 function renderMeetingButton(){
   const wrap = document.getElementById('meetingBtnWrap');
   if(!wrap) return;
-  wrap.innerHTML = isHigherAuthority(currentUserId)
-    ? `<button class="meeting-btn" onclick="openMeetingModal()" title="New Teams Meeting">📅<span class="btn-label"> New Teams Meeting</span></button>` : '';
+  wrap.innerHTML = canManageMeetings(currentUserId)
+    ? `<button class="meeting-btn" onclick="openMeetingsList()" title="Teams Meetings">📅<span class="btn-label"> Teams Meetings</span></button>` : '';
 }
-function openMeetingModal(){
-  document.getElementById('mtSubject').value = '';
-  document.getElementById('mtDate').value = '';
-  document.getElementById('mtTime').value = '';
-  document.getElementById('mtDuration').value = '30';
+let editingMeetingId = null; // set while the modal is editing an existing meeting instead of creating a new one
+
+function openMeetingsList(){
+  document.getElementById('meetingsOverlay').classList.add('show');
+  renderMeetingsDashboard();
+}
+function closeMeetingsList(){ document.getElementById('meetingsOverlay').classList.remove('show'); }
+
+function renderMeetingsDashboard(){
+  const body = document.getElementById('meetingsBody');
+  if(!body) return;
+  if(!canManageMeetings(currentUserId)){
+    body.innerHTML = '<div class="empty-note">🔒 Teams Meetings are managed by Head Office / HR.</div>';
+    return;
+  }
+  if(!meetings.length){
+    body.innerHTML = '<div class="empty-note">No Teams meetings scheduled yet. Tap "+ New Teams Meeting" above to set one up.</div>';
+    return;
+  }
+  const now = Date.now();
+  // Upcoming (soonest first), then past/cancelled (most recent first) below —
+  // same reading order as the Bank Positions branch list.
+  const sorted = [...meetings].sort((a,b)=>{
+    const aLive = a.status!=='Cancelled' && a.end>now, bLive = b.status!=='Cancelled' && b.end>now;
+    if(aLive !== bLive) return aLive ? -1 : 1;
+    return aLive ? a.start-b.start : b.start-a.start;
+  });
+  body.innerHTML = sorted.map(m=>{
+    const g = GROUPS.find(x=>x.id===m.groupId);
+    const organizer = getUser(m.organizerUid);
+    const isCancelled = m.status==='Cancelled';
+    const isPast = !isCancelled && m.end < now;
+    const statusLabel = isCancelled ? 'CANCELLED' : (isPast ? 'ENDED' : 'SCHEDULED');
+    const cardClass = isCancelled ? 'rejected' : (isPast ? 'approved' : 'pending');
+    const canAct = !isCancelled && !isPast;
+    return `
+    <div class="approval-card ${cardClass}">
+      <div class="approval-top">
+        <span class="approval-type">${escapeHtml(g?g.name:'Unknown group')}</span>
+        <span class="approval-status ${cardClass}">${statusLabel}</span>
+      </div>
+      <div class="approval-title">${escapeHtml(m.subject)}</div>
+      <div class="approval-detail">${m.start ? new Date(m.start).toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'}) : ''} · Organizer: ${escapeHtml(organizer?organizer.name:'Unknown')}</div>
+      <div class="approval-actions">
+        ${canAct ? `<button class="btn-mini btn-approve" onclick="window.open('${m.joinUrl}','_blank')">Join</button>` : ''}
+        ${canAct ? `<button class="btn-mini btn-print" onclick="openMeetingModal('${m.id}')">Edit</button>` : ''}
+        ${canAct ? `<button class="btn-mini btn-reject" onclick="cancelMeeting('${m.id}')">Cancel</button>` : ''}
+        ${isCancelled||isPast ? `<button class="btn-mini btn-print" onclick="window.open('${m.joinUrl}','_blank')">Link</button>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+function openMeetingModal(meetingId){
+  editingMeetingId = meetingId || null;
+  const m = editingMeetingId ? meetings.find(x=>x.id===editingMeetingId) : null;
+  document.getElementById('meetingModalTitle').textContent = m ? '📅 Edit Teams Meeting' : '📅 New Teams Meeting';
+  document.getElementById('meetingSubmitBtn').textContent = m ? 'Save Changes' : 'Create & Share Link';
   document.getElementById('mtGroup').innerHTML = GROUPS.map(g=>`<option value="${g.id}">${escapeHtml(g.name)}</option>`).join('');
+  if(m){
+    document.getElementById('mtSubject').value = m.subject;
+    document.getElementById('mtGroup').value = m.groupId;
+    const s = new Date(m.start), e = new Date(m.end);
+    document.getElementById('mtDate').value = s.toISOString().slice(0,10);
+    document.getElementById('mtTime').value = s.toTimeString().slice(0,5);
+    document.getElementById('mtDuration').value = Math.max(15, Math.round((e-s)/60000));
+  } else {
+    document.getElementById('mtSubject').value = '';
+    document.getElementById('mtDate').value = '';
+    document.getElementById('mtTime').value = '';
+    document.getElementById('mtDuration').value = '30';
+  }
   document.getElementById('meetingError').style.display = 'none';
   document.getElementById('meetingModal').classList.add('show');
 }
-function closeMeetingModal(){ document.getElementById('meetingModal').classList.remove('show'); }
+function closeMeetingModal(){ document.getElementById('meetingModal').classList.remove('show'); editingMeetingId = null; }
+async function getGraphToken(scopes){
+  const account = msalInstance.getAllAccounts()[0];
+  try{ return (await msalInstance.acquireTokenSilent({ scopes, account })).accessToken; }
+  catch(e){ return (await msalInstance.acquireTokenPopup({ scopes })).accessToken; }
+}
 async function submitMeeting(){
   const subject = document.getElementById('mtSubject').value.trim();
   const date = document.getElementById('mtDate').value;
@@ -2865,38 +2999,90 @@ async function submitMeeting(){
   if(!subject || !date || !time){ errEl.textContent = 'Fill in the subject, date and time.'; errEl.style.display = 'block'; return; }
   const start = new Date(date+'T'+time+':00');
   const end = new Date(start.getTime() + duration*60000);
+  const existing = editingMeetingId ? meetings.find(x=>x.id===editingMeetingId) : null;
   try{
-    const account = msalInstance.getAllAccounts()[0];
-    let token;
-    try{ token = (await msalInstance.acquireTokenSilent({ scopes:['OnlineMeetings.ReadWrite'], account })).accessToken; }
-    catch(e){ token = (await msalInstance.acquireTokenPopup({ scopes:['OnlineMeetings.ReadWrite'] })).accessToken; }
-    const resp = await fetch('https://graph.microsoft.com/v1.0/me/onlineMeetings', {
-      method:'POST',
-      headers:{ 'Content-Type':'application/json', Authorization:'Bearer '+token },
-      body: JSON.stringify({ startDateTime: start.toISOString(), endDateTime: end.toISOString(), subject })
-    });
-    if(!resp.ok) throw new Error('Graph request failed: '+resp.status);
-    const meeting = await resp.json();
-    await postMeetingMessage(groupId, subject, start, meeting.joinWebUrl);
+    const token = await getGraphToken(['OnlineMeetings.ReadWrite']);
+    let meeting;
+    if(existing){
+      const resp = await fetch('https://graph.microsoft.com/v1.0/me/onlineMeetings/'+encodeURIComponent(existing.graphMeetingId), {
+        method:'PATCH',
+        headers:{ 'Content-Type':'application/json', Authorization:'Bearer '+token },
+        body: JSON.stringify({ startDateTime: start.toISOString(), endDateTime: end.toISOString(), subject })
+      });
+      if(!resp.ok) throw new Error('Graph request failed: '+resp.status);
+      meeting = await resp.json();
+      await patchListItemFields(APP_CONFIG.meetingsListId, existing.__itemId, {
+        Title: subject, GroupId: groupId, StartDateTime: start.toISOString(), EndDateTime: end.toISOString()
+      });
+      Object.assign(existing, { subject, groupId, start: start.getTime(), end: end.getTime() });
+      await postMeetingMessage(groupId, subject, start, existing.joinUrl, 'updated');
+    } else {
+      const resp = await fetch('https://graph.microsoft.com/v1.0/me/onlineMeetings', {
+        method:'POST',
+        headers:{ 'Content-Type':'application/json', Authorization:'Bearer '+token },
+        body: JSON.stringify({ startDateTime: start.toISOString(), endDateTime: end.toISOString(), subject })
+      });
+      if(!resp.ok) throw new Error('Graph request failed: '+resp.status);
+      meeting = await resp.json();
+      try{
+        const created = await createListItem(APP_CONFIG.meetingsListId, {
+          Title: subject, GroupId: groupId, OrganizerId: currentUserId,
+          StartDateTime: start.toISOString(), EndDateTime: end.toISOString(),
+          JoinUrl: meeting.joinWebUrl, GraphMeetingId: meeting.id, Status: 'Scheduled'
+        });
+        meetings.push({
+          id:'mt_'+created.id, subject, groupId, organizerUid: currentUserId,
+          start: start.getTime(), end: end.getTime(), joinUrl: meeting.joinWebUrl,
+          graphMeetingId: meeting.id, status:'Scheduled', __itemId: created.id
+        });
+      }catch(e){
+        console.error('Meeting created in Teams but could not be saved to SharePoint — check meetingsListId in APP_CONFIG', e);
+      }
+      await postMeetingMessage(groupId, subject, start, meeting.joinWebUrl, 'scheduled');
+    }
     closeMeetingModal();
+    if(document.getElementById('meetingsOverlay').classList.contains('show')) renderMeetingsDashboard();
     window.open(meeting.joinWebUrl, '_blank');
   }catch(err){
     console.error(err);
-    errEl.textContent = 'Couldn\u2019t create the Teams meeting. Make sure OnlineMeetings.ReadWrite has admin consent in Azure AD, then try again.';
+    errEl.textContent = 'Couldn\u2019t save the Teams meeting. Make sure OnlineMeetings.ReadWrite has admin consent in Azure AD, then try again.';
     errEl.style.display = 'block';
   }
 }
-async function postMeetingMessage(groupId, subject, start, joinUrl){
-  const g = GROUPS.find(x=>x.id===groupId);
-  if(!g) return;
+async function cancelMeeting(meetingId){
+  const m = meetings.find(x=>x.id===meetingId);
+  if(!m) return;
+  if(!confirm('Cancel "'+m.subject+'"? Everyone in the chat will be notified.')) return;
   try{
-    await postMessageToGroup(groupId, {
-      type:'circular',
-      text: `📅 Teams Meeting scheduled: "${subject}" on ${start.toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'})}.\nJoin: ${joinUrl}`
-    });
+    const token = await getGraphToken(['OnlineMeetings.ReadWrite']);
+    try{
+      const resp = await fetch('https://graph.microsoft.com/v1.0/me/onlineMeetings/'+encodeURIComponent(m.graphMeetingId), {
+        method:'DELETE', headers:{ Authorization:'Bearer '+token }
+      });
+      if(!resp.ok && resp.status!==404) console.error('Graph delete returned', resp.status); // meeting may have already ended/been removed in Teams — still cancel our record below
+    }catch(e){ console.error('Graph delete failed, cancelling locally anyway', e); }
+    await patchListItemFields(APP_CONFIG.meetingsListId, m.__itemId, { Status: 'Cancelled' });
+    m.status = 'Cancelled';
+    await postMeetingMessage(m.groupId, m.subject, new Date(m.start), m.joinUrl, 'cancelled');
+    renderMeetingsDashboard();
   }catch(e){
     console.error(e);
-    // Meeting itself was created successfully in Teams — just the chat notice failed to save.
+    alert('Couldn\u2019t cancel the meeting — check your connection and try again.');
+  }
+}
+async function postMeetingMessage(groupId, subject, start, joinUrl, action){
+  const g = GROUPS.find(x=>x.id===groupId);
+  if(!g) return;
+  const verb = action==='cancelled' ? '❌ Teams Meeting cancelled' : action==='updated' ? '📅 Teams Meeting updated' : '📅 Teams Meeting scheduled';
+  const when = start.toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'});
+  const text = action==='cancelled'
+    ? `${verb}: "${subject}" (was ${when}).`
+    : `${verb}: "${subject}" on ${when}.\nJoin: ${joinUrl}`;
+  try{
+    await postMessageToGroup(groupId, { type:'circular', text });
+  }catch(e){
+    console.error(e);
+    // Meeting itself was created/updated successfully in Teams — just the chat notice failed to save.
   }
   if(activeGroupId===groupId) renderChat();
   renderGroupList();
