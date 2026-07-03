@@ -2507,7 +2507,7 @@ async function signInWithMicrosoft(){
     await msalInstance.initialize(); // required in MSAL.js v3 before any other API call
     const result = await msalInstance.loginPopup({
       scopes: ['User.Read', 'Sites.ReadWrite.All', 'ChannelMessage.Send', 'Chat.ReadWrite']
-      // OnlineMeetings.ReadWrite is requested later, only when someone clicks "New Teams Meeting" (see acquireTokenPopup below) —
+      // Calendars.ReadWrite is requested later, only when someone clicks "New Teams Meeting" (see acquireTokenPopup below) —
       // keeps login itself to permissions every employee actually needs, so regular staff never hit an admin-consent wall.
     });
     const upn = result.account.username; // e.g. nagpur@godavariurban.onmicrosoft.com
@@ -3008,52 +3008,69 @@ async function submitMeeting(){
   const end = new Date(start.getTime() + duration*60000);
   const existing = editingMeetingId ? meetings.find(x=>x.id===editingMeetingId) : null;
   try{
-    const token = await getGraphToken(['OnlineMeetings.ReadWrite']);
-    let meeting;
+    const token = await getGraphToken(['Calendars.ReadWrite']);
+    let meeting, joinUrl;
     if(existing){
-      const resp = await fetch('https://graph.microsoft.com/v1.0/me/onlineMeetings/'+encodeURIComponent(existing.graphMeetingId), {
+      // PATCH the calendar event (not a standalone onlineMeeting) — this keeps the Teams meeting
+      // AND the calendar entry in sync, which is what makes it show up in the Calendar tab.
+      const resp = await fetch('https://graph.microsoft.com/v1.0/me/events/'+encodeURIComponent(existing.graphMeetingId), {
         method:'PATCH',
         headers:{ 'Content-Type':'application/json', Authorization:'Bearer '+token },
-        body: JSON.stringify({ startDateTime: start.toISOString(), endDateTime: end.toISOString(), subject })
+        body: JSON.stringify({
+          subject,
+          start:{ dateTime: start.toISOString(), timeZone:'UTC' },
+          end:{ dateTime: end.toISOString(), timeZone:'UTC' }
+        })
       });
       if(!resp.ok) throw new Error('Graph request failed: '+resp.status);
       meeting = await resp.json();
+      joinUrl = meeting.onlineMeeting ? meeting.onlineMeeting.joinUrl : existing.joinUrl;
       await patchListItemFields(APP_CONFIG.meetingsListId, existing.__itemId, {
         Title: subject, GroupId: groupId, StartDateTime: start.toISOString(), EndDateTime: end.toISOString()
       });
-      Object.assign(existing, { subject, groupId, start: start.getTime(), end: end.getTime() });
-      await postMeetingMessage(groupId, subject, start, existing.joinUrl, 'updated');
+      Object.assign(existing, { subject, groupId, start: start.getTime(), end: end.getTime(), joinUrl });
+      await postMeetingMessage(groupId, subject, start, joinUrl, 'updated');
     } else {
-      const resp = await fetch('https://graph.microsoft.com/v1.0/me/onlineMeetings', {
+      // Create a calendar EVENT with isOnlineMeeting:true instead of a bare /onlineMeetings object.
+      // /me/onlineMeetings alone never touches the calendar, which is why past meetings had a
+      // working join link but never appeared in Teams/Outlook — this fixes that.
+      const resp = await fetch('https://graph.microsoft.com/v1.0/me/events', {
         method:'POST',
         headers:{ 'Content-Type':'application/json', Authorization:'Bearer '+token },
-        body: JSON.stringify({ startDateTime: start.toISOString(), endDateTime: end.toISOString(), subject })
+        body: JSON.stringify({
+          subject,
+          start:{ dateTime: start.toISOString(), timeZone:'UTC' },
+          end:{ dateTime: end.toISOString(), timeZone:'UTC' },
+          isOnlineMeeting: true,
+          onlineMeetingProvider: 'teamsForBusiness'
+        })
       });
       if(!resp.ok) throw new Error('Graph request failed: '+resp.status);
       meeting = await resp.json();
+      joinUrl = meeting.onlineMeeting ? meeting.onlineMeeting.joinUrl : '';
       try{
         const created = await createListItem(APP_CONFIG.meetingsListId, {
           Title: subject, GroupId: groupId, OrganizerId: currentUserId,
           StartDateTime: start.toISOString(), EndDateTime: end.toISOString(),
-          JoinUrl: meeting.joinWebUrl, GraphMeetingId: meeting.id, Status: 'Scheduled'
+          JoinUrl: joinUrl, GraphMeetingId: meeting.id, Status: 'Scheduled'
         });
         meetings.push({
           id:'mt_'+created.id, subject, groupId, organizerUid: currentUserId,
-          start: start.getTime(), end: end.getTime(), joinUrl: meeting.joinWebUrl,
+          start: start.getTime(), end: end.getTime(), joinUrl: joinUrl,
           graphMeetingId: meeting.id, status:'Scheduled', __itemId: created.id
         });
       }catch(e){
         console.error('Meeting created in Teams but could not be saved to SharePoint — check meetingsListId in APP_CONFIG', e);
         meetingsListReady = false;
       }
-      await postMeetingMessage(groupId, subject, start, meeting.joinWebUrl, 'scheduled');
+      await postMeetingMessage(groupId, subject, start, joinUrl, 'scheduled');
     }
     closeMeetingModal();
     if(document.getElementById('meetingsOverlay').classList.contains('show')) renderMeetingsDashboard();
-    window.open(meeting.joinWebUrl, '_blank');
+    window.open(joinUrl, '_blank');
   }catch(err){
     console.error(err);
-    errEl.textContent = 'Couldn\u2019t save the Teams meeting. Make sure OnlineMeetings.ReadWrite has admin consent in Azure AD, then try again.';
+    errEl.textContent = 'Couldn\u2019t save the Teams meeting. Make sure Calendars.ReadWrite has admin consent in Azure AD, then try again.';
     errEl.style.display = 'block';
   }
 }
@@ -3062,9 +3079,10 @@ async function cancelMeeting(meetingId){
   if(!m) return;
   if(!confirm('Cancel "'+m.subject+'"? Everyone in the chat will be notified.')) return;
   try{
-    const token = await getGraphToken(['OnlineMeetings.ReadWrite']);
+    const token = await getGraphToken(['Calendars.ReadWrite']);
     try{
-      const resp = await fetch('https://graph.microsoft.com/v1.0/me/onlineMeetings/'+encodeURIComponent(m.graphMeetingId), {
+      // Deleting the calendar event also cancels the linked Teams meeting.
+      const resp = await fetch('https://graph.microsoft.com/v1.0/me/events/'+encodeURIComponent(m.graphMeetingId), {
         method:'DELETE', headers:{ Authorization:'Bearer '+token }
       });
       if(!resp.ok && resp.status!==404) console.error('Graph delete returned', resp.status); // meeting may have already ended/been removed in Teams — still cancel our record below
