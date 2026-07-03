@@ -933,7 +933,7 @@ const APP_CONFIG = {
   approvalsListId: '4f34d28e-09af-4203-916b-4d9447a5fbd4', // Approvals list
   positionsListId: '2ab0511e-dfd1-45a5-97a6-43b22d3f6f6e', // Positions list
   customGroupsListId: '0c5dee45-6a9e-432e-a79b-d375df998e49', // CustomGroups list
-  meetingsListId: 'PASTE_YOUR_MEETINGS_LIST_ID_HERE', // Meetings list — see setup note below
+  meetingsListId: '65557532-1536-47fd-b74f-bce979227c3a', // Meetings list
 };
 
 /* ============ DATA MODEL ============ */
@@ -1033,6 +1033,7 @@ let reactions = {};  // messageId -> {emoji: [userIds]}
 let positions = [];  // daily bank position submissions
 let customGroups = []; // groups created in-app by Higher Authority / HR
 let meetings = []; // Teams meetings scheduled from the app — {id, subject, groupId, organizerUid, start, end, joinUrl, graphMeetingId, status, __itemId}
+let meetingsListReady = APP_CONFIG.meetingsListId && APP_CONFIG.meetingsListId !== 'PASTE_YOUR_MEETINGS_LIST_ID_HERE';
 let lastSeen = {};   // lastSeen[uid][groupId] = timestamp -> WhatsApp-style unread badges
 let passwordResetRequests = []; // {id, employeeId, name, branch, time} — raised via "Forgot password?"
 function nowMinus(mins){ return Date.now() - mins*60000; }
@@ -1122,7 +1123,13 @@ async function loadData(isRefresh){
       fetchAllListItems(APP_CONFIG.approvalsListId, 'Title,GroupId,RequesterId,A_Type,Details,Status,SubmittedOn'),
       fetchAllListItems(APP_CONFIG.positionsListId, 'BranchId,SubmittedBy,Data,SubmittedOn'),
       fetchAllListItems(APP_CONFIG.customGroupsListId, 'Title,Name,CG_Type,MemberIds,CreatedBy,Icon'),
-      fetchAllListItems(APP_CONFIG.meetingsListId, 'Title,GroupId,OrganizerId,StartDateTime,EndDateTime,JoinUrl,GraphMeetingId,Status').catch(e=>{ console.error('Meetings list fetch failed — check meetingsListId in APP_CONFIG', e); return []; }),
+      meetingsListReady
+        ? fetchAllListItems(APP_CONFIG.meetingsListId, 'Title,GroupId,OrganizerId,StartDateTime,EndDateTime,JoinUrl,GraphMeetingId,Status').catch(e=>{
+            console.error('Meetings list fetch failed — check meetingsListId in APP_CONFIG. Pausing further attempts until reload.', e);
+            meetingsListReady = false;
+            return [];
+          })
+        : Promise.resolve([]),
     ]);
 
     msgRows.forEach(r=>{
@@ -3037,6 +3044,7 @@ async function submitMeeting(){
         });
       }catch(e){
         console.error('Meeting created in Teams but could not be saved to SharePoint — check meetingsListId in APP_CONFIG', e);
+        meetingsListReady = false;
       }
       await postMeetingMessage(groupId, subject, start, meeting.joinWebUrl, 'scheduled');
     }
