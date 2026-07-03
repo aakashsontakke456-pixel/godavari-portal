@@ -2995,7 +2995,9 @@ async function getGraphToken(scopes){
   try{ return (await msalInstance.acquireTokenSilent({ scopes, account })).accessToken; }
   catch(e){ return (await msalInstance.acquireTokenPopup({ scopes })).accessToken; }
 }
+let meetingSubmitInFlight = false;
 async function submitMeeting(){
+  if(meetingSubmitInFlight) return; // guards against double-click / double-tap creating duplicate meetings
   const subject = document.getElementById('mtSubject').value.trim();
   const date = document.getElementById('mtDate').value;
   const time = document.getElementById('mtTime').value;
@@ -3021,6 +3023,11 @@ async function submitMeeting(){
   const start = new Date(date+'T'+time+':00');
   const end = new Date(start.getTime() + duration*60000);
   const existing = editingMeetingId ? meetings.find(x=>x.id===editingMeetingId) : null;
+  meetingSubmitInFlight = true;
+  const submitBtn = document.getElementById('meetingSubmitBtn');
+  const submitBtnOriginalText = submitBtn.textContent;
+  submitBtn.disabled = true;
+  submitBtn.textContent = existing ? 'Saving…' : 'Creating…';
   try{
     const token = await getGraphToken(['Calendars.ReadWrite']);
     let meeting, joinUrl;
@@ -3088,6 +3095,10 @@ async function submitMeeting(){
     console.error(err);
     errEl.textContent = 'Couldn\u2019t save the Teams meeting. Make sure Calendars.ReadWrite has admin consent in Azure AD, then try again.';
     errEl.style.display = 'block';
+  }finally{
+    meetingSubmitInFlight = false;
+    submitBtn.disabled = false;
+    submitBtn.textContent = submitBtnOriginalText;
   }
 }
 async function cancelMeeting(meetingId){
