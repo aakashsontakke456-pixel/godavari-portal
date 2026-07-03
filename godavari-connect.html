@@ -992,7 +992,7 @@ function checkForNewPositionSubmissions(){
   if(seenPositionIds === null){ seenPositionIds = todayIds; return; } // first load — nothing "new" yet
   let sawNew = false;
   todayIds.forEach(id=>{ if(!seenPositionIds.has(id)) sawNew = true; });
-  if(sawNew && isHigherAuthority(currentUserId)) hasNewPositionAlert = true;
+  if(sawNew && canSeeAllBranchPositions(currentUserId)) hasNewPositionAlert = true;
   seenPositionIds = todayIds;
 }
 
@@ -1156,6 +1156,20 @@ async function saveData(){}
 function getUser(uid){ return USERS.find(u=>u.id===uid); }
 function isHigherAuthority(uid){ return getUser(uid).role === 'Higher Authority'; }
 function isManagerOrAbove(uid){ const r=getUser(uid).role; return r==='Manager'||r==='Higher Authority'; }
+/* Head Office is modelled as just another branch (its own manager + staff),
+   so by default its employees only ever saw THEIR OWN branch's submission
+   status — same as someone sitting in Guntur or any other branch. In
+   practice Head Office staff need the same org-wide "who has submitted
+   today" visibility as Higher Authority, since they're the ones fielding
+   questions about it day to day. isHeadOfficeStaff() flags anyone whose
+   branch is Head Office regardless of their Employee/Manager role; it is
+   used ONLY to widen Bank Positions visibility + the new-submission alert,
+   never for approvals/group-admin rights, which stay Higher-Authority-only. */
+function isHeadOfficeStaff(uid){
+  const b = branchOfUser(uid);
+  return !!b && b.name.trim().toLowerCase() === 'head office';
+}
+function canSeeAllBranchPositions(uid){ return isHigherAuthority(uid) || isHeadOfficeStaff(uid); }
 function fmtTime(ts){
   const d = new Date(ts);
   return d.toLocaleString('en-IN', {hour:'2-digit', minute:'2-digit', day:'2-digit', month:'short'});
@@ -1387,11 +1401,11 @@ function renderPinnedPosition(){
   const myBranch = branchOfUser(currentUserId);
   const submittedCount = BRANCHES.filter(b=>todaysPositionFor(b.id)).length;
   let sub, badge;
-  if(isHigherAuthority(currentUserId)){
+  if(canSeeAllBranchPositions(currentUserId)){
     sub = `${submittedCount} of ${BRANCHES.length} branches submitted today`;
     const blinkClass = hasNewPositionAlert ? ' blink' : '';
     badge = submittedCount===BRANCHES.length ? `<span class="pp-badge ok">All in</span>` : `<span class="pp-badge warn${blinkClass}">${BRANCHES.length-submittedCount} pending</span>`;
-    if(hasNewPositionAlert) sub = '🆕 New position submitted — ' + sub;
+    if(hasNewPositionAlert) sub = '🆕 New position submitted — tap to see which branch · ' + sub;
   } else if(myBranch){
     const mine = todaysPositionFor(myBranch.id);
     sub = mine ? `${myBranch.name} submitted today at ${fmtTime(mine.time)}` : `${myBranch.name} — not yet submitted today`;
@@ -1411,7 +1425,7 @@ function renderPinnedPosition(){
   </div>`;
   const mnPosBadge = document.getElementById('mnPositionsBadge');
   if(mnPosBadge){
-    mnPosBadge.style.display = (isHigherAuthority(currentUserId) && hasNewPositionAlert) ? 'block' : 'none';
+    mnPosBadge.style.display = (canSeeAllBranchPositions(currentUserId) && hasNewPositionAlert) ? 'block' : 'none';
     mnPosBadge.className = 'mn-badge' + (hasNewPositionAlert ? ' blink' : '');
   }
 }
@@ -2263,14 +2277,27 @@ function todaysPositionFor(branchId){
 function openPositions(){
   renderPositionsDashboard();
   document.getElementById('positionsOverlay').classList.add('show');
+  // Match the Chats/Approvals bottom-nav behaviour: whichever tab was tapped
+  // shows as active, so Positions doesn't look "stuck" on Chats/Approvals
+  // after being opened from the mobile nav bar.
+  document.querySelectorAll('.mn-btn').forEach(b=>b.classList.remove('active'));
+  const mnPos = document.getElementById('mnPositions');
+  if(mnPos) mnPos.classList.add('active');
   if(hasNewPositionAlert){ hasNewPositionAlert = false; renderPinnedPosition(); }
 }
-function closePositions(){ document.getElementById('positionsOverlay').classList.remove('show'); }
+function closePositions(){
+  document.getElementById('positionsOverlay').classList.remove('show');
+  // Restore whichever bottom-nav tab was active before Positions was opened
+  // (Chats or Approvals), since Positions itself isn't a persistent pane.
+  document.querySelectorAll('.mn-btn').forEach(b=>b.classList.remove('active'));
+  const btn = document.getElementById(mobilePane==='approvals'?'mnApprovals':'mnChats');
+  if(btn) btn.classList.add('active');
+}
 
 function renderPositionsDashboard(){
   const body = document.getElementById('positionsBody');
   const myBranch = branchOfUser(currentUserId);
-  const canSeeAll = isHigherAuthority(currentUserId);
+  const canSeeAll = canSeeAllBranchPositions(currentUserId);
   let html = '';
 
   // Submission status — visible to manager/staff of a branch. Uses the same
