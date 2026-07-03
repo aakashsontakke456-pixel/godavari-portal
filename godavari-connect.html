@@ -997,27 +997,35 @@ function checkForNewPositionSubmissions(){
 }
 
 function anyModalOpen(){
-  return !!document.querySelector('.modal-overlay.show');
+  // Read-only overlays (Bank Positions dashboard, Members list) are safe to
+  // refresh underneath the person — nothing there is being typed into, and
+  // Higher Authority staring at a stale "6 pending" while new submissions
+  // roll in is exactly the staleness this live sync exists to fix. Only
+  // modals with actual form fields block a refresh, so an in-progress entry
+  // never gets wiped out from under someone.
+  const blocking = ['approvalModal','groupSettingsModal','profileModal','createGroupModal','meetingModal','dailyPositionModal'];
+  return blocking.some(id=>{ const el = document.getElementById(id); return el && el.classList.contains('show'); });
 }
 
 async function livePoll(){
   if(!currentUserId) return;
   if(document.hidden) return;       // don't burn API calls while the tab is backgrounded
-  if(anyModalOpen()) return;        // don't refresh under an open modal / in-progress form
+  if(anyModalOpen()) return;        // don't refresh under an open form
   const msgInput = document.getElementById('msgInput');
   const draft = msgInput ? msgInput.value : '';
   const wasFocused = document.activeElement === msgInput;
-  const prevGroupCount = GROUPS.length;
   try{
     await loadData(true);
   }catch(e){ console.error('live sync failed', e); return; }
   rebuildBranchesAndGroups();
   checkForNewPositionSubmissions();
   renderAll();
-  if(GROUPS.length !== prevGroupCount){
-    // A group (e.g. a newly generated Position Group) appeared or disappeared —
-    // renderGroupList() above already picked it up.
-  }
+  // The Bank Positions dashboard has its own table that renderAll() doesn't
+  // touch (it's only (re)built when the modal is opened) — refresh it too
+  // so a Manager's submission shows up for Higher Authority immediately,
+  // even while they're already looking at the dashboard.
+  const positionsOverlay = document.getElementById('positionsOverlay');
+  if(positionsOverlay && positionsOverlay.classList.contains('show')) renderPositionsDashboard();
   const msgInput2 = document.getElementById('msgInput');
   if(msgInput2){
     msgInput2.value = draft;
@@ -1068,15 +1076,29 @@ async function loadData(isRefresh){
     });
     Object.keys(messages).forEach(gid=>messages[gid].sort((a,b)=>a.time-b.time));
 
+    // A person can end up with several pending PasswordReset rows in
+    // SharePoint (retrying "Forgot password?", a flaky connection, etc.).
+    // Collapse them into ONE card per employee here; approvePasswordReset()
+    // then resolves every underlying row at once via __approvalItemIds.
+    const pendingResetsByEmployee = {};
     apRows.forEach(r=>{
       let extra = {}; try{ extra = JSON.parse(r.Details||'{}'); }catch(e){}
       if(r.A_Type === 'PasswordReset'){
         if((r.Status||'').toLowerCase() === 'pending'){
-          passwordResetRequests.push({
-            id: 'pwr_'+r.__itemId, employeeId: r.RequesterId, itemId: extra.employeeItemId,
-            name: r.Title, branch: extra.branch, time: Date.parse(r.SubmittedOn)||Date.now(),
-            __approvalItemId: r.__itemId
-          });
+          const key = r.RequesterId;
+          if(!pendingResetsByEmployee[key]){
+            pendingResetsByEmployee[key] = {
+              id: 'pwr_'+r.__itemId, employeeId: r.RequesterId, itemId: extra.employeeItemId,
+              name: r.Title, branch: extra.branch, time: Date.parse(r.SubmittedOn)||Date.now(),
+              __approvalItemIds: [r.__itemId]
+            };
+          } else {
+            const existing = pendingResetsByEmployee[key];
+            existing.__approvalItemIds.push(r.__itemId);
+            const t = Date.parse(r.SubmittedOn)||Date.now();
+            if(t > existing.time) existing.time = t; // show the most recent request time
+            if(!existing.itemId && extra.employeeItemId) existing.itemId = extra.employeeItemId;
+          }
         }
         return;
       }
@@ -1087,6 +1109,7 @@ async function loadData(isRefresh){
         approvedBy: extra.approvedBy, decidedAt: extra.decidedAt, __itemId: r.__itemId
       });
     });
+    passwordResetRequests = Object.values(pendingResetsByEmployee);
 
     posRows.forEach(r=>{
       let vals = {}; try{ vals = JSON.parse(r.Data||'{}'); }catch(e){}
@@ -1507,7 +1530,7 @@ function renderInputArea(g){
   const area = document.getElementById('inputArea');
   if(canPost){
     const myBranch = branchOfUser(currentUserId);
-    const showTemplateBtn = g.type==='branch' && g.branchId && myBranch && myBranch.id===g.branchId;
+    const showTemplateBtn = g.type==='branch' && myBranch && branchGroupId(myBranch)===g.id;
     area.innerHTML = `
     <div class="input-bar">
       <button class="icon-btn secondary" title="Attach" onclick="toggleAttachMenu(event)">📎</button>
@@ -1519,7 +1542,7 @@ function renderInputArea(g){
           <div class="ai-icon doc">📄</div> Document
         </div>
       </div>
-      ${showTemplateBtn ? `<button class="icon-btn secondary" title="Send today's position" onclick="openDailyPosition('${g.branchId}')">📊</button>` : ''}
+      ${showTemplateBtn ? `<button class="icon-btn secondary" title="Send today's position" onclick="openDailyPosition('${myBranch.id}')">📊</button>` : ''}
       <input type="text" id="msgInput" placeholder="${g.postRestricted?'Post circular / order to all employees...':'Type a message...'}" onkeydown="if(event.key==='Enter')sendMessage()">
       <button class="icon-btn" onclick="sendMessage()">➤</button>
     </div>`;
@@ -2645,20 +2668,40 @@ async function setStoredPassword(row, pw){
 }
 
 /* ============ FORGOT PASSWORD ============ */
+/* Looks for a PasswordReset row for this employee that's still pending,
+   directly in SharePoint — passwordResetRequests is usually empty at this
+   point (nobody's signed in yet this session), so an in-memory check alone
+   would miss a request raised in an earlier session and create a duplicate. */
+async function findPendingPasswordReset(employeeId){
+  try{
+    const token = await getGraphToken();
+    const url = `https://graph.microsoft.com/v1.0/sites/${APP_CONFIG.siteId}/lists/${APP_CONFIG.approvalsListId}/items`
+      + `?$filter=fields/RequesterId eq '${employeeId}' and fields/A_Type eq 'PasswordReset' and fields/Status eq 'pending'`
+      + `&$expand=fields($select=RequesterId,A_Type,Status)&$top=5`;
+    const resp = await fetch(url, { headers: { Authorization: 'Bearer ' + token } });
+    if(!resp.ok) return null;
+    const data = await resp.json();
+    return (data.value && data.value.length) ? data.value[0].id : null;
+  }catch(e){ console.error('findPendingPasswordReset failed', e); return null; }
+}
 async function requestPasswordReset(){
   if(!pendingRow) return;
   const nowIso = new Date().toISOString();
   try{
-    const created = await createListItem(APP_CONFIG.approvalsListId, {
-      Title: pendingRow.FullName, GroupId: '', RequesterId: pendingRow.EmployeeID, A_Type: 'PasswordReset',
-      Details: JSON.stringify({ branch: pendingRow.Branch, employeeItemId: pendingRow.__itemId }),
-      Status: 'pending', SubmittedOn: nowIso
-    });
-    passwordResetRequests = passwordResetRequests.filter(r=>r.employeeId!==pendingRow.EmployeeID);
-    passwordResetRequests.push({
-      id:'pwr_'+created.id, employeeId: pendingRow.EmployeeID, itemId: pendingRow.__itemId,
-      name: pendingRow.FullName, branch: pendingRow.Branch, time: Date.parse(nowIso), __approvalItemId: created.id
-    });
+    const existingItemId = await findPendingPasswordReset(pendingRow.EmployeeID);
+    if(!existingItemId){
+      const created = await createListItem(APP_CONFIG.approvalsListId, {
+        Title: pendingRow.FullName, GroupId: '', RequesterId: pendingRow.EmployeeID, A_Type: 'PasswordReset',
+        Details: JSON.stringify({ branch: pendingRow.Branch, employeeItemId: pendingRow.__itemId }),
+        Status: 'pending', SubmittedOn: nowIso
+      });
+      passwordResetRequests.push({
+        id:'pwr_'+created.id, employeeId: pendingRow.EmployeeID, itemId: pendingRow.__itemId,
+        name: pendingRow.FullName, branch: pendingRow.Branch, time: Date.parse(nowIso), __approvalItemIds: [created.id]
+      });
+    }
+    // If one's already pending, we deliberately don't touch it — just
+    // reassure the person below that it's still on its way to HR.
   }catch(e){
     console.error(e);
     showAuthError('whoamiError','Couldn\u2019t send the reset request — check your connection and try again.');
@@ -2670,7 +2713,9 @@ async function requestPasswordReset(){
 }
 /* Higher Authority / HR action from the Approvals panel — clears the stored
    hash so the employee is prompted to set a fresh password on next login,
-   and marks the Approvals row as resolved so it stops showing as pending. */
+   and marks every underlying Approvals row for that employee as resolved
+   (there can be more than one if they tapped "Forgot password?" a few
+   times before this got actioned) so none of them keep showing as pending. */
 async function approvePasswordReset(reqId){
   const req = passwordResetRequests.find(r=>r.id===reqId);
   if(!req) return;
@@ -2687,8 +2732,10 @@ async function approvePasswordReset(reqId){
     }
     if(!itemId) throw new Error('Could not locate employee row in SharePoint');
     await patchEmployeeFields(itemId, { PasswordHash: '', UpdatedOn: new Date().toISOString() });
-    if(req.__approvalItemId){
-      await patchListItemFields(APP_CONFIG.approvalsListId, req.__approvalItemId, { Status: 'approved' });
+    const idsToResolve = req.__approvalItemIds || (req.__approvalItemId ? [req.__approvalItemId] : []);
+    for(const id of idsToResolve){
+      try{ await patchListItemFields(APP_CONFIG.approvalsListId, id, { Status: 'approved' }); }
+      catch(e){ console.error('Could not resolve duplicate reset row '+id, e); }
     }
   }catch(e){
     console.error(e);
