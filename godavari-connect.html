@@ -3001,6 +3001,20 @@ async function submitMeeting(){
   const time = document.getElementById('mtTime').value;
   const duration = parseInt(document.getElementById('mtDuration').value, 10) || 30;
   const groupId = document.getElementById('mtGroup').value;
+  // Pull real invite addresses from the selected audience's members, so the
+  // event actually shows on their calendars / they get a Teams invite —
+  // not just a bare join link posted in chat.
+  const targetGroup = GROUPS.find(g=>g.id===groupId);
+  const attendeeUpns = targetGroup
+    ? [...new Set(targetGroup.memberIds)]
+        .filter(uid=>uid!==currentUserId)
+        .map(uid=>{ const u = USERS.find(x=>x.id===uid); return u && u.upn; })
+        .filter(Boolean)
+    : [];
+  const attendees = attendeeUpns.map(upn=>({
+    emailAddress: { address: upn },
+    type: 'required'
+  }));
   const errEl = document.getElementById('meetingError');
   errEl.style.display = 'none';
   if(!subject || !date || !time){ errEl.textContent = 'Fill in the subject, date and time.'; errEl.style.display = 'block'; return; }
@@ -3019,7 +3033,8 @@ async function submitMeeting(){
         body: JSON.stringify({
           subject,
           start:{ dateTime: start.toISOString(), timeZone:'UTC' },
-          end:{ dateTime: end.toISOString(), timeZone:'UTC' }
+          end:{ dateTime: end.toISOString(), timeZone:'UTC' },
+          attendees
         })
       });
       if(!resp.ok) throw new Error('Graph request failed: '+resp.status);
@@ -3042,7 +3057,8 @@ async function submitMeeting(){
           start:{ dateTime: start.toISOString(), timeZone:'UTC' },
           end:{ dateTime: end.toISOString(), timeZone:'UTC' },
           isOnlineMeeting: true,
-          onlineMeetingProvider: 'teamsForBusiness'
+          onlineMeetingProvider: 'teamsForBusiness',
+          attendees
         })
       });
       if(!resp.ok) throw new Error('Graph request failed: '+resp.status);
