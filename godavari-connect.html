@@ -419,14 +419,24 @@
   .rs-label{}
 
   @media (max-width: 860px){
-    .topbar{padding:10px 12px;}
-    .brand-text{font-size:15.5px;}
-    .brand-sub{font-size:9px;}
+    .topbar{padding:8px 10px;gap:8px;flex-wrap:nowrap;}
+    .brand{gap:7px;min-width:0;flex-shrink:1;}
+    .brand-mark{width:30px;height:30px;font-size:13px;flex-shrink:0;}
+    .brand-text{font-size:14.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    .brand-sub{display:none;} /* subtitle costs width/height we don't have on a phone header */
     .desktop-positions-btn{display:none;}
     .rs-label{display:none;}
     .role-switch select{max-width:132px;font-size:11.5px;padding:6px 5px;}
     .userchip{display:none;}
     .chat-back-btn{display:inline-flex;align-items:center;}
+
+    /* Right-hand action cluster: icon-only chips so the header never overflows,
+       full meaning still reachable via tap / title tooltip. */
+    #mainTopbar > div:last-child{gap:6px;flex-shrink:0;}
+    .sync-badge{padding:5px 7px;font-size:13px;line-height:1;border-radius:8px;}
+    .sync-badge .btn-label, .meeting-btn .btn-label, .logout-btn .btn-label{display:none;}
+    .meeting-btn{padding:6px 9px;font-size:14px;line-height:1;}
+    .logout-btn{padding:6px 9px;font-size:14px;line-height:1;border-radius:8px;}
 
     .app{position:relative;overflow:hidden;}
     .sidebar, .chat-panel, .rightbar{width:100%;}
@@ -460,6 +470,9 @@
     .pinned-position{padding-bottom:28px;}
 
     .modal{width:92vw !important;}
+  }
+  @media (max-width: 380px){
+    .brand-text{max-width:110px;}
   }
   @media (min-width: 861px){
     .rightbar-head .chat-back-btn{display:none;}
@@ -518,8 +531,8 @@
   .sync-badge.ok{background:rgba(255,255,255,.15);color:#bdf3d8;}
   .sync-badge.bad{background:rgba(255,255,255,.15);color:#ffb3ac;cursor:pointer;}
   .sync-badge.checking{background:rgba(255,255,255,.15);color:#f0e6c8;}
-  .logout-btn{background:transparent;border:1px solid rgba(255,255,255,.4);color:#fff;border-radius:8px;padding:6px 11px;font-size:12px;font-weight:700;cursor:pointer;}
-  .logout-btn:hover{background:rgba(255,255,255,.12);}
+  .logout-btn{background:#c23b22;border:1px solid #8f2a18;color:#fff;border-radius:8px;padding:6px 11px;font-size:12px;font-weight:700;cursor:pointer;}
+  .logout-btn:hover{background:#a83019;}
   .meeting-btn{background:#0e4a40;color:#fff;border:1px solid #1d6f5f;border-radius:8px;padding:7px 12px;font-size:12.5px;font-weight:700;cursor:pointer;}
 </style>
 </head>
@@ -574,11 +587,11 @@
     </div>
   </div>
   <div style="display:flex;align-items:center;gap:12px;">
-    <span class="sync-badge checking" id="syncBadge" onclick="retrySync()" title="SharePoint / Graph connection status">⏳ Checking…</span>
+    <span class="sync-badge checking" id="syncBadge" onclick="retrySync()" title="SharePoint / Graph connection status">⏳<span class="btn-label"> Checking…</span></span>
     <button id="positionsBtn" class="desktop-positions-btn" onclick="openPositions()" style="background:#0e4a40;color:#fff;border:1px solid #1d6f5f;border-radius:8px;padding:7px 12px;font-size:12.5px;font-weight:700;cursor:pointer;">📊 Bank Positions</button>
     <div id="meetingBtnWrap"></div>
     <div class="userchip" id="currentUserChip" title="View / edit your profile" onclick="openMyProfile()" style="cursor:pointer;"></div>
-    <button class="logout-btn" onclick="confirmLogout()">⏻ Logout</button>
+    <button class="logout-btn" onclick="confirmLogout()" title="Logout" aria-label="Logout">⏻<span class="btn-label"> Logout</span></button>
   </div>
 </div>
 
@@ -637,7 +650,7 @@
 <!-- MOBILE BOTTOM NAV -->
 <div class="mobile-nav">
   <button class="mn-btn active" id="mnChats" onclick="setMobilePane('chats')"><span class="mn-icon">💬</span>Chats</button>
-  <button class="mn-btn" id="mnPositions" onclick="openPositions()"><span class="mn-icon">📊</span>Positions</button>
+  <button class="mn-btn" id="mnPositions" onclick="openPositions()"><span class="mn-icon" style="position:relative;display:inline-block;">📊<span class="mn-badge" id="mnPositionsBadge" style="display:none;"></span></span>Positions</button>
   <button class="mn-btn" id="mnApprovals" onclick="setMobilePane('approvals')"><span class="mn-icon" style="position:relative;display:inline-block;">✅<span class="mn-badge" id="mnApprovalsBadge" style="display:none;"></span></span>Approvals</button>
 </div>
 
@@ -965,17 +978,75 @@ let lastSeen = {};   // lastSeen[uid][groupId] = timestamp -> WhatsApp-style unr
 let passwordResetRequests = []; // {id, employeeId, name, branch, time} — raised via "Forgot password?"
 function nowMinus(mins){ return Date.now() - mins*60000; }
 
+/* ============ LIVE SYNC ============
+   Polls SharePoint every few seconds so a Manager's position submission, an
+   approval decision, a new circular, or a freshly generated Position Group
+   shows up for everyone else without anyone having to log out and back in. */
+let liveSyncTimer = null;
+let seenPositionIds = null;   // Set of today's position ids as of the last check
+let hasNewPositionAlert = false; // true once a NEW submission has arrived since Higher Authority last opened Bank Positions
+const LIVE_SYNC_INTERVAL_MS = 12000;
+
+function checkForNewPositionSubmissions(){
+  const todayIds = new Set(positions.filter(p=>isSameDay(p.time, Date.now())).map(p=>p.id));
+  if(seenPositionIds === null){ seenPositionIds = todayIds; return; } // first load — nothing "new" yet
+  let sawNew = false;
+  todayIds.forEach(id=>{ if(!seenPositionIds.has(id)) sawNew = true; });
+  if(sawNew && isHigherAuthority(currentUserId)) hasNewPositionAlert = true;
+  seenPositionIds = todayIds;
+}
+
+function anyModalOpen(){
+  return !!document.querySelector('.modal-overlay.show');
+}
+
+async function livePoll(){
+  if(!currentUserId) return;
+  if(document.hidden) return;       // don't burn API calls while the tab is backgrounded
+  if(anyModalOpen()) return;        // don't refresh under an open modal / in-progress form
+  const msgInput = document.getElementById('msgInput');
+  const draft = msgInput ? msgInput.value : '';
+  const wasFocused = document.activeElement === msgInput;
+  const prevGroupCount = GROUPS.length;
+  try{
+    await loadData(true);
+  }catch(e){ console.error('live sync failed', e); return; }
+  rebuildBranchesAndGroups();
+  checkForNewPositionSubmissions();
+  renderAll();
+  if(GROUPS.length !== prevGroupCount){
+    // A group (e.g. a newly generated Position Group) appeared or disappeared —
+    // renderGroupList() above already picked it up.
+  }
+  const msgInput2 = document.getElementById('msgInput');
+  if(msgInput2){
+    msgInput2.value = draft;
+    if(wasFocused) msgInput2.focus();
+  }
+}
+function startLiveSync(){
+  if(liveSyncTimer) clearInterval(liveSyncTimer);
+  liveSyncTimer = setInterval(livePoll, LIVE_SYNC_INTERVAL_MS);
+  document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) livePoll(); });
+}
+function stopLiveSync(){
+  if(liveSyncTimer){ clearInterval(liveSyncTimer); liveSyncTimer = null; }
+}
+
 /* Pulls Messages, Approvals (incl. password-reset requests), Positions, and
    CustomGroups from their real SharePoint lists and rebuilds in-memory state.
-   Called at login and can be re-called any time to pick up what other
-   people have posted (multi-user chat needs this, unlike single-device
-   window.storage which never worked outside this chat preview anyway).
+   Called at login and re-called periodically by the live-sync poller so
+   multi-user chat, positions, approvals and groups stay up to date without
+   anyone needing to log out and back in.
    Note: message reactions and per-user read receipts (lastSeen) have no
    backing list yet and stay session-only for now — everything else here
-   is a real row in SharePoint. */
-async function loadData(){
+   is a real row in SharePoint. Pass isRefresh=true for a periodic poll so
+   those session-only bits (and any manual member-list overrides) aren't
+   wiped out every few seconds — only a real login should reset them. */
+async function loadData(isRefresh){
   messages = {}; approvals = []; positions = []; customGroups = []; groupOverrides = {};
-  passwordResetRequests = []; reactions = {}; lastSeen = {}; savedGroupMembers = {};
+  passwordResetRequests = [];
+  if(!isRefresh){ reactions = {}; lastSeen = {}; savedGroupMembers = {}; }
   try{
     const [msgRows, apRows, posRows, groupRows] = await Promise.all([
       fetchAllListItems(APP_CONFIG.messagesListId, 'GroupId,SenderId,SenderName,Body,SentOn'),
@@ -1026,11 +1097,17 @@ async function loadData(){
     });
 
     // Rows whose Title is a real custom-group id (created via "+ New Group") are
-    // actual groups; any other row here is a Higher Authority rename/icon
-    // override for one of the auto-generated base/branch groups (Title holds
-    // that group's fixed id, e.g. 'g_all', 'g_celeb', 'g_branch_xxx').
-    const realGroupRows = groupRows.filter(r=>(r.Title||'').startsWith('g_custom_'));
-    const overrideRows = groupRows.filter(r=>!(r.Title||'').startsWith('g_custom_'));
+    // actual groups; rows for a branch's auto-generated Position Group (Title
+    // 'g_branch_xxx', created via "Generate Position Groups") are ALSO real
+    // groups — they must not be mistaken for a rename/icon override just
+    // because their Title doesn't start with 'g_custom_'. A row is only a
+    // Higher Authority rename/icon override for one of the base/branch
+    // groups (fixed id like 'g_all', 'g_celeb', or a not-yet-generated
+    // 'g_branch_xxx') when it was saved with CG_Type 'custom' AND its Title
+    // isn't a real custom-group id — that's the one case saveGroupSettings()
+    // actually writes an override row for.
+    const realGroupRows = groupRows.filter(r=>(r.Title||'').startsWith('g_custom_') || (r.CG_Type||'')!=='custom');
+    const overrideRows = groupRows.filter(r=>!(r.Title||'').startsWith('g_custom_') && (r.CG_Type||'')==='custom');
     customGroups = realGroupRows.map(r=>{
       let memberIds = []; try{ memberIds = JSON.parse(r.MemberIds||'[]'); }catch(e){}
       return {
@@ -1289,7 +1366,9 @@ function renderPinnedPosition(){
   let sub, badge;
   if(isHigherAuthority(currentUserId)){
     sub = `${submittedCount} of ${BRANCHES.length} branches submitted today`;
-    badge = submittedCount===BRANCHES.length ? `<span class="pp-badge ok">All in</span>` : `<span class="pp-badge warn">${BRANCHES.length-submittedCount} pending</span>`;
+    const blinkClass = hasNewPositionAlert ? ' blink' : '';
+    badge = submittedCount===BRANCHES.length ? `<span class="pp-badge ok">All in</span>` : `<span class="pp-badge warn${blinkClass}">${BRANCHES.length-submittedCount} pending</span>`;
+    if(hasNewPositionAlert) sub = '🆕 New position submitted — ' + sub;
   } else if(myBranch){
     const mine = todaysPositionFor(myBranch.id);
     sub = mine ? `${myBranch.name} submitted today at ${fmtTime(mine.time)}` : `${myBranch.name} — not yet submitted today`;
@@ -1307,6 +1386,11 @@ function renderPinnedPosition(){
     </div>
     ${badge}
   </div>`;
+  const mnPosBadge = document.getElementById('mnPositionsBadge');
+  if(mnPosBadge){
+    mnPosBadge.style.display = (isHigherAuthority(currentUserId) && hasNewPositionAlert) ? 'block' : 'none';
+    mnPosBadge.className = 'mn-badge' + (hasNewPositionAlert ? ' blink' : '');
+  }
 }
 
 function openGroup(gid){
@@ -1340,8 +1424,12 @@ function renderChat(){
 
   const msgs = messages[g.id]||[];
   const box = document.getElementById('messages');
+  // Only auto-scroll to the latest message if the person was already near
+  // the bottom — otherwise a background live-sync refresh would yank them
+  // away from history they're scrolled up reading.
+  const wasNearBottom = (box.scrollHeight - box.scrollTop - box.clientHeight) < 120;
   box.innerHTML = '<div class="day-divider">Today</div>' + msgs.map(m=>renderMessage(m, g)).join('');
-  box.scrollTop = box.scrollHeight;
+  if(wasNearBottom) box.scrollTop = box.scrollHeight;
 
   renderInputArea(g);
 }
@@ -2051,13 +2139,26 @@ async function generatePositionGroups(missing){
     if(customGroups.find(c=>c.id===gid)) continue;
     const memberIds = [...new Set([...hoReps, b.managerId, ...b.staffIds].filter(Boolean))];
     try{
-      const res = await createListItemIconSafe(APP_CONFIG.customGroupsListId, {
-        Title: gid, Name: b.name+' – Position Group', CG_Type: 'branch', Icon: '🏢',
-        MemberIds: JSON.stringify(memberIds), CreatedBy: currentUserId
-      });
+      // If this branch's group was renamed before it was ever generated, an
+      // override row already exists under the same Title — reuse (patch) it
+      // instead of creating a duplicate row with the same Title.
+      const existingOverride = groupOverrides[gid];
+      const savedName = (existingOverride && existingOverride.name) || (b.name+' – Position Group');
+      const savedIcon = (existingOverride && existingOverride.icon) || '🏢';
+      let res;
+      if(existingOverride && existingOverride.__itemId){
+        const iconSaved = await patchListItemIconSafe(APP_CONFIG.customGroupsListId, existingOverride.__itemId, { Name: savedName, CG_Type: 'branch', Icon: savedIcon, MemberIds: JSON.stringify(memberIds), CreatedBy: currentUserId });
+        res = { item:{ id: existingOverride.__itemId }, iconSaved };
+        delete groupOverrides[gid];
+      } else {
+        res = await createListItemIconSafe(APP_CONFIG.customGroupsListId, {
+          Title: gid, Name: savedName, CG_Type: 'branch', Icon: savedIcon,
+          MemberIds: JSON.stringify(memberIds), CreatedBy: currentUserId
+        });
+      }
       customGroups.push({
-        id: gid, name: b.name+' – Position Group', type: 'branch', postRestricted:false,
-        icon: res.iconSaved ? '🏢' : '', sub: 'Branch position group', memberIds, __itemId: res.item.id
+        id: gid, name: savedName, type: 'branch', postRestricted:false,
+        icon: res.iconSaved ? savedIcon : '', sub: 'Branch position group', memberIds, __itemId: res.item.id
       });
       messages[gid] = messages[gid] || [];
       createdCount++;
@@ -2139,6 +2240,7 @@ function todaysPositionFor(branchId){
 function openPositions(){
   renderPositionsDashboard();
   document.getElementById('positionsOverlay').classList.add('show');
+  if(hasNewPositionAlert){ hasNewPositionAlert = false; renderPinnedPosition(); }
 }
 function closePositions(){ document.getElementById('positionsOverlay').classList.remove('show'); }
 
@@ -2406,7 +2508,9 @@ function setSyncBadge(state){
   const el = document.getElementById('syncBadge');
   if(!el) return;
   el.className = 'sync-badge '+state;
-  el.textContent = state==='ok' ? '🟢 Synced with SharePoint' : state==='bad' ? '🔴 Not synced — tap to retry' : '⏳ Checking…';
+  const icon = state==='ok' ? '🟢' : state==='bad' ? '🔴' : '⏳';
+  const label = state==='ok' ? ' Synced with SharePoint' : state==='bad' ? ' Not synced — tap to retry' : ' Checking…';
+  el.innerHTML = icon + '<span class="btn-label">' + label + '</span>';
 }
 
 function rowToUser(row){
@@ -2612,7 +2716,9 @@ async function finishLogin(row){
   // load, when there's no signed-in account yet to fetch with.
   await loadData();
   rebuildBranchesAndGroups(); // re-run so any loaded CustomGroups slot into GROUPS correctly
+  checkForNewPositionSubmissions(); // seeds seenPositionIds — first call never alerts
   renderAll();
+  startLiveSync();
 }
 
 /* ============ LOGOUT ============ */
@@ -2620,6 +2726,7 @@ function confirmLogout(){ document.getElementById('logoutModal').classList.add('
 function closeLogoutModal(){ document.getElementById('logoutModal').classList.remove('show'); }
 async function doLogout(){
   closeLogoutModal();
+  stopLiveSync();
   try{
     if(msalInstance){
       const account = msalInstance.getAllAccounts()[0];
@@ -2634,7 +2741,7 @@ function renderMeetingButton(){
   const wrap = document.getElementById('meetingBtnWrap');
   if(!wrap) return;
   wrap.innerHTML = isHigherAuthority(currentUserId)
-    ? `<button class="meeting-btn" onclick="openMeetingModal()">📅 New Teams Meeting</button>` : '';
+    ? `<button class="meeting-btn" onclick="openMeetingModal()" title="New Teams Meeting">📅<span class="btn-label"> New Teams Meeting</span></button>` : '';
 }
 function openMeetingModal(){
   document.getElementById('mtSubject').value = '';
