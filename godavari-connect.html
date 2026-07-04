@@ -34,7 +34,8 @@
     color:var(--ink);
     display:flex;
     flex-direction:column;
-    height:100vh;
+    height:100vh; /* fallback for old browsers */
+    height:100dvh; /* real visible viewport on mobile Chrome, ignores the address-bar height */
     overflow:hidden;
   }
   /* TOP BAR */
@@ -1029,7 +1030,7 @@ function rebuildBranchesAndGroups(){
   const hoIds = USERS.filter(u=>u.role==='Higher Authority').map(u=>u.id);
   const mgrIds = USERS.filter(u=>u.role==='Manager').map(u=>u.id);
   const baseGroups = [
-    {id:'g_all', name:'Godavari – All Employees', type:'broadcast', postRestricted:true, sub:'Org-wide circulars & orders',
+    {id:'g_all', name:'Godavari – All Employees', type:'broadcast', postRestricted:false, sub:'Org-wide circulars & orders',
       memberIds: USERS.map(u=>u.id)},
     {id:'g_celeb', name:'Celebrations 🎉', type:'celebration', postRestricted:false, sub:'Birthdays, wishes, good news',
       memberIds: USERS.map(u=>u.id)},
@@ -1812,29 +1813,25 @@ function toggleReaction(mid, emoji){
 }
 
 function renderInputArea(g){
-  const canPost = !g.postRestricted || isHigherAuthority(currentUserId);
+  // Every member of a group can chat and send attachments — no posting restriction.
   const area = document.getElementById('inputArea');
-  if(canPost){
-    const myBranch = branchOfUser(currentUserId);
-    const showTemplateBtn = g.type==='branch' && myBranch && branchGroupId(myBranch)===g.id;
-    area.innerHTML = `
-    <div class="input-bar">
-      <button class="icon-btn secondary" title="Attach" onclick="toggleAttachMenu(event)">📎</button>
-      <div class="attach-menu" id="attachMenu">
-        <div class="attach-item" onclick="closeAttachMenu();document.getElementById('fileInputMedia').click()">
-          <div class="ai-icon media">📷</div> Photo or Video
-        </div>
-        <div class="attach-item" onclick="closeAttachMenu();document.getElementById('fileInputDoc').click()">
-          <div class="ai-icon doc">📄</div> Document
-        </div>
+  const myBranch = branchOfUser(currentUserId);
+  const showTemplateBtn = g.type==='branch' && myBranch && branchGroupId(myBranch)===g.id;
+  area.innerHTML = `
+  <div class="input-bar">
+    <button class="icon-btn secondary" title="Attach" onclick="toggleAttachMenu(event)">📎</button>
+    <div class="attach-menu" id="attachMenu">
+      <div class="attach-item" onclick="closeAttachMenu();document.getElementById('fileInputMedia').click()">
+        <div class="ai-icon media">📷</div> Photo or Video
       </div>
-      ${showTemplateBtn ? `<button class="icon-btn secondary" title="Send today's position" onclick="openDailyPosition('${myBranch.id}')">📊</button>` : ''}
-      <input type="text" id="msgInput" placeholder="${g.postRestricted?'Post circular / order to all employees...':'Type a message...'}" onkeydown="if(event.key==='Enter')sendMessage()">
-      <button class="icon-btn" onclick="sendMessage()">➤</button>
-    </div>`;
-  } else {
-    area.innerHTML = `<div class="react-only-note">🔒 Only Higher Authority can post here. You can react to messages above (👍 ❤️ 🎉).</div>`;
-  }
+      <div class="attach-item" onclick="closeAttachMenu();document.getElementById('fileInputDoc').click()">
+        <div class="ai-icon doc">📄</div> Document
+      </div>
+    </div>
+    ${showTemplateBtn ? `<button class="icon-btn secondary" title="Send today's position" onclick="openDailyPosition('${myBranch.id}')">📊</button>` : ''}
+    <input type="text" id="msgInput" placeholder="Type a message..." onkeydown="if(event.key==='Enter')sendMessage()">
+    <button class="icon-btn" onclick="sendMessage()">➤</button>
+  </div>`;
 }
 
 /* ============ ATTACHMENTS ============ */
