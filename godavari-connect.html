@@ -414,6 +414,12 @@
     padding:0 4px 0 0;line-height:1;
   }
   .chat-back-btn-inline{color:var(--teal-dark);}
+  /* The Daily Bank Positions back arrow should always be usable, not just on
+     narrow/mobile widths like the rest of chat-back-btn — it's a full
+     dashboard overlay on any screen size, so the way back shouldn't depend
+     on window width. */
+  #positionsOverlay .chat-back-btn{display:inline-flex !important;align-items:center;color:var(--teal-dark);}
+  #meetingsOverlay .chat-back-btn{color:var(--teal-dark);}
   .mobile-nav{display:none;}
   .mobile-only-pin{display:none;} /* Approvals & Requests: mobile-only, shown as a compact chip in the corner of the Bank Positions row, not its own full row. On PC/window mode the panel stays in the always-visible right sidebar. */
   .rs-label{}
@@ -759,11 +765,17 @@
       <div class="profile-sub" id="profRoleTag"></div>
     </div>
     <div id="profEditBlock" style="display:none;">
+      <input type="file" id="profPhotoInput" accept="image/*" style="display:none;" onchange="onProfilePhotoSelected(this)">
+      <div class="modal-actions" style="justify-content:flex-start;gap:8px;margin:0 0 14px;">
+        <button type="button" class="btn-cancel" style="flex:none;padding:6px 12px;" onclick="document.getElementById('profPhotoInput').click()">📷 Upload photo</button>
+        <button type="button" class="btn-cancel" id="profRemovePhotoBtn" style="flex:none;padding:6px 12px;display:none;" onclick="removeProfilePhoto()">Remove photo</button>
+      </div>
+      <div class="settings-note" id="profPhotoNote" style="display:none;"></div>
       <label>Choose avatar colour</label>
       <div class="swatch-row" id="profSwatchRow"></div>
       <label>Choose avatar icon</label>
       <div class="emoji-row" id="profEmojiRow"></div>
-      <div class="settings-note">This is how your avatar appears to everyone in Godavari Connect, same as a WhatsApp profile photo.</div>
+      <div class="settings-note">Upload a real photo, or fall back to a colour + icon — same idea as a WhatsApp profile photo. The colour + icon are used whenever no photo is set.</div>
     </div>
     <div style="margin-top:10px;">
       <div class="profile-field"><span>Employee ID</span><span id="profEmpId"></span></div>
@@ -838,6 +850,8 @@
     <input id="mtTime" type="time">
     <label>Duration (minutes)</label>
     <input id="mtDuration" type="number" value="30" min="15" step="15">
+    <label>Agenda (optional)</label>
+    <textarea id="mtAgenda" placeholder="Topics to cover, links, notes for attendees…"></textarea>
     <div class="modal-actions">
       <button class="btn-cancel" onclick="closeMeetingModal()">Cancel</button>
       <button class="btn-submit" id="meetingSubmitBtn" onclick="submitMeeting()">Create &amp; Share Link</button>
@@ -921,6 +935,14 @@
      JoinUrl             Multiple lines of text (plain text) — Teams join links run long
      GraphMeetingId     Single line of text   (Microsoft Graph onlineMeeting id — needed to edit/cancel later)
      Status             Single line of text   (Scheduled / Cancelled)
+
+   SETUP NOTE — Profile photo upload:
+   To let people upload a real photo (not just a colour+icon avatar), add ONE
+   more column to the EmployeeDirectory list:
+     PhotoItemId        Single line of text   (Graph drive-item id of the uploaded photo)
+   The photo file itself is stored in this SharePoint site's default document
+   library, in an auto-created "ProfilePhotos" folder — no separate library
+   needs to be created by hand.
 */
 const APP_CONFIG = {
   tenantId:   'e47e4128-1c1b-4510-a440-415145dc1cde', // Godavari Internal App > Directory (tenant) ID
@@ -1067,31 +1089,41 @@ function anyModalOpen(){
   return blocking.some(id=>{ const el = document.getElementById(id); return el && el.classList.contains('show'); });
 }
 
+let livePollInFlight = false; // guards against overlapping polls (e.g. the interval
+// tick and a visibilitychange-triggered poll firing close together) racing on the
+// shared in-memory arrays — that race was the cause of meetings/positions briefly
+// showing duplicated or flickering entries.
 async function livePoll(){
   if(!currentUserId) return;
   if(document.hidden) return;       // don't burn API calls while the tab is backgrounded
   if(anyModalOpen()) return;        // don't refresh under an open form
+  if(livePollInFlight) return;      // a previous poll is still in flight — skip this tick
+  livePollInFlight = true;
   const msgInput = document.getElementById('msgInput');
   const draft = msgInput ? msgInput.value : '';
   const wasFocused = document.activeElement === msgInput;
   try{
-    await loadData(true);
-  }catch(e){ console.error('live sync failed', e); return; }
-  rebuildBranchesAndGroups();
-  checkForNewPositionSubmissions();
-  renderAll();
-  // The Bank Positions dashboard has its own table that renderAll() doesn't
-  // touch (it's only (re)built when the modal is opened) — refresh it too
-  // so a Manager's submission shows up for Higher Authority immediately,
-  // even while they're already looking at the dashboard.
-  const positionsOverlay = document.getElementById('positionsOverlay');
-  if(positionsOverlay && positionsOverlay.classList.contains('show')) renderPositionsDashboard();
-  const meetingsOverlay = document.getElementById('meetingsOverlay');
-  if(meetingsOverlay && meetingsOverlay.classList.contains('show')) renderMeetingsDashboard();
-  const msgInput2 = document.getElementById('msgInput');
-  if(msgInput2){
-    msgInput2.value = draft;
-    if(wasFocused) msgInput2.focus();
+    try{
+      await loadData(true);
+    }catch(e){ console.error('live sync failed', e); return; }
+    rebuildBranchesAndGroups();
+    checkForNewPositionSubmissions();
+    renderAll();
+    // The Bank Positions dashboard has its own table that renderAll() doesn't
+    // touch (it's only (re)built when the modal is opened) — refresh it too
+    // so a Manager's submission shows up for Higher Authority immediately,
+    // even while they're already looking at the dashboard.
+    const positionsOverlay = document.getElementById('positionsOverlay');
+    if(positionsOverlay && positionsOverlay.classList.contains('show')) renderPositionsDashboard();
+    const meetingsOverlay = document.getElementById('meetingsOverlay');
+    if(meetingsOverlay && meetingsOverlay.classList.contains('show')) renderMeetingsDashboard();
+    const msgInput2 = document.getElementById('msgInput');
+    if(msgInput2){
+      msgInput2.value = draft;
+      if(wasFocused) msgInput2.focus();
+    }
+  } finally {
+    livePollInFlight = false;
   }
 }
 function startLiveSync(){
@@ -1188,7 +1220,13 @@ async function loadData(isRefresh){
       });
     });
 
+    // Dedupe by SharePoint item id — belt-and-suspenders against any single
+    // fetch returning the same row twice (e.g. a paging edge case), so a
+    // meeting can never appear twice in the dashboard even if that happens.
+    const seenMeetingItemIds = new Set();
     meetingRows.forEach(r=>{
+      if(seenMeetingItemIds.has(r.__itemId)) return;
+      seenMeetingItemIds.add(r.__itemId);
       meetings.push({
         id: 'mt_'+r.__itemId, subject: r.Title||'', groupId: r.GroupId,
         organizerUid: r.OrganizerId, start: Date.parse(r.StartDateTime)||Date.now(),
@@ -1262,15 +1300,92 @@ function fmtTime(ts){
 function initialsColor(id){ return id; }
 
 /* ============ AVATAR RENDERING (personal profile photo, WhatsApp-style) ============
-   Real image upload isn't wired to a document library, so "profile photo" here
-   means a chosen colour + emoji shown wherever the plain initials avatar used
-   to be. Falls back to the auto-generated initials/gradient when unset. */
+   Two layers: a real uploaded photo (avatarPhotoItemId, a Graph drive-item id)
+   takes priority when present; otherwise falls back to a chosen colour + emoji,
+   or finally the auto-generated initials. Photos live in this site's document
+   library and need an authenticated fetch to display (a plain <img src> can't
+   carry a bearer token), so they're hydrated asynchronously after the initial
+   render: the fallback shows immediately, then swaps to the real photo once
+   it's fetched. photoBlobCache keeps each photo's object URL for the rest of
+   the session so it isn't re-fetched every re-render. */
 const AVATAR_COLORS = ['#0f5c4f','#15806d','#25a584','#c9a24b','#b5452f','#3a6ea5','#7a4fa0','#2f7a5c'];
 const AVATAR_EMOJIS = ['','😀','🙂','🧑\u200d💼','👩\u200d💼','🧔','👨\u200d🌾','🕵️','🦸','🐯','🌟','🍀','⚡','📊'];
+const photoBlobCache = {}; // itemId -> object URL
 function userAvatarHtml(u, cls){
   const style = u.avatarColor ? ` style="background:${u.avatarColor}"` : '';
   const content = u.avatarIcon || u.avatar;
-  return `<div class="${cls}"${style}>${content}</div>`;
+  const photoAttr = u.avatarPhotoItemId ? ` data-photo-avatar="${u.avatarPhotoItemId}"` : '';
+  return `<div class="${cls}"${style}${photoAttr}>${content}</div>`;
+}
+/* Finds every avatar element waiting on a real photo and fills it in once
+   fetched. Safe to call after any render — already-hydrated elements are
+   skipped via the data-hydrated marker. */
+function hydrateAvatarPhotos(){
+  document.querySelectorAll('[data-photo-avatar]:not([data-hydrated])').forEach(async el=>{
+    const itemId = el.getAttribute('data-photo-avatar');
+    el.setAttribute('data-hydrated','1');
+    const url = await getPhotoObjectUrl(itemId);
+    if(url) el.innerHTML = `<img src="${url}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;" alt="">`;
+  });
+}
+async function getPhotoObjectUrl(itemId){
+  if(!itemId) return null;
+  if(photoBlobCache[itemId]) return photoBlobCache[itemId];
+  try{
+    const token = await getGraphToken(['Sites.ReadWrite.All']);
+    const resp = await fetch(`https://graph.microsoft.com/v1.0/sites/${APP_CONFIG.siteId}/drive/items/${encodeURIComponent(itemId)}/content`, {
+      headers:{ Authorization:'Bearer '+token }
+    });
+    if(!resp.ok) throw new Error('Photo fetch failed: '+resp.status);
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    photoBlobCache[itemId] = url;
+    return url;
+  }catch(e){
+    console.error('Could not load profile photo', e);
+    return null;
+  }
+}
+/* Shrinks whatever photo someone picks (a phone camera shot can be 4-10MB)
+   down to a small square JPEG before it ever leaves the device — keeps
+   uploads fast and cheap without needing any server-side processing. */
+function resizeImageFile(file, maxSize){
+  return new Promise((resolve, reject)=>{
+    const img = new Image();
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Could not read file'));
+    reader.onload = () => { img.onerror = () => reject(new Error('Not a valid image')); img.onload = () => {
+      const scale = Math.min(1, maxSize / Math.max(img.width, img.height));
+      const w = Math.round(img.width*scale), h = Math.round(img.height*scale);
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      canvas.toBlob(blob=>blob ? resolve(blob) : reject(new Error('Could not process image')), 'image/jpeg', 0.85);
+    }; img.src = reader.result; };
+    reader.readAsDataURL(file);
+  });
+}
+/* Ensures the ProfilePhotos folder exists (no-op / ignored if it already
+   does — a 409 conflict here just means someone else's upload created it
+   first), then uploads the resized photo and returns the new drive-item id. */
+async function uploadProfilePhoto(blob, employeeId){
+  const token = await getGraphToken(['Sites.ReadWrite.All']);
+  try{
+    await fetch(`https://graph.microsoft.com/v1.0/sites/${APP_CONFIG.siteId}/drive/root/children`, {
+      method:'POST',
+      headers:{ Authorization:'Bearer '+token, 'Content-Type':'application/json' },
+      body: JSON.stringify({ name:'ProfilePhotos', folder:{}, '@microsoft.graph.conflictBehavior':'fail' })
+    });
+  }catch(e){ /* folder already exists — fine */ }
+  const fileName = `${employeeId}_${Date.now()}.jpg`;
+  const resp = await fetch(`https://graph.microsoft.com/v1.0/sites/${APP_CONFIG.siteId}/drive/root:/ProfilePhotos/${encodeURIComponent(fileName)}:/content`, {
+    method:'PUT',
+    headers:{ Authorization:'Bearer '+token, 'Content-Type':'image/jpeg' },
+    body: blob
+  });
+  if(!resp.ok) throw new Error('Photo upload failed: '+resp.status);
+  const item = await resp.json();
+  return item.id;
 }
 
 /* ============ CURRENT USER CHIP (real signed-in identity, no more "viewing as" demo switch) ============ */
@@ -1285,23 +1400,32 @@ function renderCurrentUserChip(){
 let profileViewingUid = null;
 let profSelectedColor = '';
 let profSelectedEmoji = '';
+let profPendingPhotoBlob = null; // Blob (newly picked, not yet saved) | 'REMOVE' | null (no change)
+let profPendingPhotoPreviewUrl = null; // local object URL for the pending blob, so Save isn't needed just to preview it
 
 function openMyProfile(){
   if(!currentUserId) return;
   profileViewingUid = currentUserId;
+  profPendingPhotoBlob = null; profPendingPhotoPreviewUrl = null;
   renderProfileModal();
   document.getElementById('profileModal').classList.add('show');
 }
 function viewEmployeeProfile(uid){
   profileViewingUid = uid;
+  profPendingPhotoBlob = null; profPendingPhotoPreviewUrl = null;
   renderProfileModal();
   document.getElementById('profileModal').classList.add('show');
 }
-function closeProfile(){ document.getElementById('profileModal').classList.remove('show'); }
+function closeProfile(){
+  document.getElementById('profileModal').classList.remove('show');
+  if(profPendingPhotoPreviewUrl){ URL.revokeObjectURL(profPendingPhotoPreviewUrl); profPendingPhotoPreviewUrl = null; }
+  profPendingPhotoBlob = null;
+}
 
-function renderProfileModal(){
+async function renderProfileModal(){
   const u = getUser(profileViewingUid);
   if(!u){ closeProfile(); return; }
+  const viewingUid = profileViewingUid; // snapshot — guards the async photo fetch below against a profile switch mid-flight
   const editable = profileViewingUid === currentUserId;
   document.getElementById('profileModalTitle').textContent = editable ? 'My Profile' : 'Employee Profile';
   document.getElementById('profName').textContent = u.name;
@@ -1313,8 +1437,30 @@ function renderProfileModal(){
   profSelectedColor = u.avatarColor || '';
   profSelectedEmoji = u.avatarIcon || '';
   const preview = document.getElementById('profAvatarPreview');
-  preview.style.background = profSelectedColor || '';
-  preview.textContent = profSelectedEmoji || u.avatar;
+  const removeBtn = document.getElementById('profRemovePhotoBtn');
+  const photoNote = document.getElementById('profPhotoNote');
+  const fallbackPreview = () => { preview.style.background = profSelectedColor || ''; preview.textContent = profSelectedEmoji || u.avatar; };
+
+  if(profPendingPhotoBlob instanceof Blob){
+    preview.style.background = '';
+    preview.innerHTML = `<img src="${profPendingPhotoPreviewUrl}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;" alt="">`;
+    if(editable){ removeBtn.style.display = 'inline-block'; photoNote.style.display = 'block'; photoNote.textContent = 'New photo selected — click Save to upload it.'; }
+  } else if(profPendingPhotoBlob === 'REMOVE'){
+    fallbackPreview();
+    if(editable){ removeBtn.style.display = 'none'; photoNote.style.display = 'block'; photoNote.textContent = 'Photo will be removed when you click Save.'; }
+  } else if(u.avatarPhotoItemId){
+    preview.style.background = ''; preview.textContent = '';
+    if(editable){ removeBtn.style.display = 'inline-block'; photoNote.style.display = 'none'; }
+    const url = await getPhotoObjectUrl(u.avatarPhotoItemId);
+    // Only apply if still looking at the same profile and nothing changed underneath while this was fetching
+    if(profileViewingUid===viewingUid && profPendingPhotoBlob===null){
+      if(url) preview.innerHTML = `<img src="${url}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;" alt="">`;
+      else fallbackPreview();
+    }
+  } else {
+    fallbackPreview();
+    if(editable){ removeBtn.style.display = 'none'; photoNote.style.display = 'none'; }
+  }
 
   document.getElementById('profEditBlock').style.display = editable ? 'block' : 'none';
   document.getElementById('profSaveBtn').style.display = editable ? 'inline-block' : 'none';
@@ -1332,21 +1478,62 @@ function renderProfileModal(){
 function pickProfileColor(c){ profSelectedColor = c; renderProfileModal(); }
 function pickProfileEmoji(e){ profSelectedEmoji = e; renderProfileModal(); }
 
+async function onProfilePhotoSelected(inputEl){
+  const file = inputEl.files && inputEl.files[0];
+  inputEl.value = ''; // clears the input so picking the same file again still fires 'change'
+  if(!file) return;
+  const photoNote = document.getElementById('profPhotoNote');
+  try{
+    const blob = await resizeImageFile(file, 500);
+    if(profPendingPhotoPreviewUrl) URL.revokeObjectURL(profPendingPhotoPreviewUrl);
+    profPendingPhotoBlob = blob;
+    profPendingPhotoPreviewUrl = URL.createObjectURL(blob);
+    renderProfileModal();
+  }catch(e){
+    console.error(e);
+    photoNote.style.display = 'block';
+    photoNote.textContent = 'Couldn\u2019t read that photo — try a different image.';
+  }
+}
+function removeProfilePhoto(){
+  if(profPendingPhotoPreviewUrl){ URL.revokeObjectURL(profPendingPhotoPreviewUrl); profPendingPhotoPreviewUrl = null; }
+  profPendingPhotoBlob = 'REMOVE';
+  renderProfileModal();
+}
+
 async function saveMyProfile(){
   const u = getUser(currentUserId);
   if(!u || !u.__itemId){
     alert('Couldn\u2019t save — your directory record is missing an internal reference. Please refresh (or re-sync) and try again.');
     return;
   }
+  const saveBtn = document.getElementById('profSaveBtn');
+  const originalText = saveBtn.textContent;
+  saveBtn.disabled = true;
+  saveBtn.textContent = 'Saving…';
   try{
-    await patchEmployeeFields(u.__itemId, { AvatarColor: profSelectedColor || '', AvatarIcon: profSelectedEmoji || '' });
+    let newPhotoItemId = u.avatarPhotoItemId || '';
+    if(profPendingPhotoBlob instanceof Blob){
+      saveBtn.textContent = 'Uploading photo…';
+      newPhotoItemId = await uploadProfilePhoto(profPendingPhotoBlob, u.employeeId);
+      photoBlobCache[newPhotoItemId] = profPendingPhotoPreviewUrl; // already have it locally — skip an immediate re-fetch
+    } else if(profPendingPhotoBlob === 'REMOVE'){
+      newPhotoItemId = '';
+    }
+    await patchEmployeeFields(u.__itemId, { AvatarColor: profSelectedColor || '', AvatarIcon: profSelectedEmoji || '', PhotoItemId: newPhotoItemId });
     u.avatarColor = profSelectedColor || '';
     u.avatarIcon = profSelectedEmoji || '';
-    closeProfile();
+    u.avatarPhotoItemId = newPhotoItemId;
+    profPendingPhotoBlob = null;
+    profPendingPhotoPreviewUrl = null;
+    document.getElementById('profileModal').classList.remove('show');
     renderAll();
   }catch(e){
     console.error(e);
-    alert('Couldn\u2019t save your profile photo to SharePoint — check your connection and try again. (This needs an "AvatarColor" and "AvatarIcon" column on the EmployeeDirectory list.)');
+    alert('Couldn\u2019t save your profile to SharePoint — check your connection and try again. (This needs "AvatarColor", "AvatarIcon" and "PhotoItemId" columns on the EmployeeDirectory list.)');
+  }finally{
+    saveBtn.disabled = false;
+    saveBtn.textContent = originalText;
   }
 }
 
@@ -1875,7 +2062,22 @@ async function decideApproval(id, status){
   renderRightPanel();
 }
 
-function openModal(){ document.getElementById('approvalModal').classList.add('show'); }
+function openModal(){
+  document.getElementById('approvalModal').classList.add('show');
+  const branchInput = document.getElementById('apBranch');
+  const myBranch = branchOfUser(currentUserId);
+  if(myBranch){
+    branchInput.value = myBranch.name;
+    branchInput.readOnly = true;
+    branchInput.style.background = '#f0f0f0';
+    branchInput.style.cursor = 'not-allowed';
+  } else {
+    branchInput.value = '';
+    branchInput.readOnly = false;
+    branchInput.style.background = '';
+    branchInput.style.cursor = '';
+  }
+}
 function closeModal(){ document.getElementById('approvalModal').classList.remove('show'); }
 async function submitApproval(){
   const title = document.getElementById('apTitle').value.trim();
@@ -1975,6 +2177,7 @@ function renderMembersModal(){
       ${manage ? `<button class="remove-btn" onclick="event.stopPropagation();removeMember('${g.id}','${uid}')">Remove</button>` : ''}
     </div>`;
   }).join('');
+  hydrateAvatarPhotos();
 
   const addBox = document.getElementById('addMemberBox');
   if(manage){
@@ -2313,6 +2516,7 @@ function renderNewGroupMemberList(){
       </div>
     </label>`).join('') || `<div class="empty-note">No employees match.</div>`;
   document.getElementById('ngSelectedCount').textContent = ngSelected.size+' selected';
+  hydrateAvatarPhotos();
 }
 function toggleNgMember(uid, checked){
   if(checked) ngSelected.add(uid); else ngSelected.delete(uid);
@@ -2556,7 +2760,7 @@ async function identifyEmployeeByUPN(upn){
 async function fetchEmployeeDirectory(upn){
   const token = await getGraphToken();
   let url = `https://graph.microsoft.com/v1.0/sites/${APP_CONFIG.siteId}/lists/${APP_CONFIG.employeeListId}/items`
-    + `?$expand=fields($select=Title,EmployeeID,FullName,Branch,Role,M365UPN,Status,PasswordHash,UpdatedOn,AvatarColor,AvatarIcon)&$top=200`;
+    + `?$expand=fields($select=Title,EmployeeID,FullName,Branch,Role,M365UPN,Status,PasswordHash,UpdatedOn,AvatarColor,AvatarIcon,PhotoItemId)&$top=200`;
   if(upn) url += `&$filter=fields/M365UPN eq '${upn}'`;
   let rows = [];
   while(url){
@@ -2677,6 +2881,11 @@ function rowToUser(row){
     // (single line text, emoji), added to the EmployeeDirectory list.
     avatarColor: row.AvatarColor || '',
     avatarIcon: row.AvatarIcon || '',
+    // Real uploaded profile photo — Graph drive-item id of the image file in
+    // this site's document library (ProfilePhotos folder). Empty when the
+    // person hasn't uploaded one, in which case avatarColor/avatarIcon (or
+    // the plain initials) are shown instead.
+    avatarPhotoItemId: row.PhotoItemId || '',
     __itemId: row.__itemId,
   };
 }
@@ -2967,12 +3176,13 @@ function renderMeetingsDashboard(){
     </div>`;
   }).join('');
 }
-function openMeetingModal(meetingId){
+async function openMeetingModal(meetingId){
   editingMeetingId = meetingId || null;
   const m = editingMeetingId ? meetings.find(x=>x.id===editingMeetingId) : null;
   document.getElementById('meetingModalTitle').textContent = m ? '📅 Edit Teams Meeting' : '📅 New Teams Meeting';
   document.getElementById('meetingSubmitBtn').textContent = m ? 'Save Changes' : 'Create & Share Link';
   document.getElementById('mtGroup').innerHTML = GROUPS.map(g=>`<option value="${g.id}">${escapeHtml(g.name)}</option>`).join('');
+  document.getElementById('mtAgenda').value = '';
   if(m){
     document.getElementById('mtSubject').value = m.subject;
     document.getElementById('mtGroup').value = m.groupId;
@@ -2980,6 +3190,18 @@ function openMeetingModal(meetingId){
     document.getElementById('mtDate').value = s.toISOString().slice(0,10);
     document.getElementById('mtTime').value = s.toTimeString().slice(0,5);
     document.getElementById('mtDuration').value = Math.max(15, Math.round((e-s)/60000));
+    // Pull the current agenda straight from the real Teams/Outlook event so
+    // editing doesn't clobber whatever was typed in last time.
+    try{
+      const token = await getGraphToken(['Calendars.ReadWrite']);
+      const resp = await fetch('https://graph.microsoft.com/v1.0/me/events/'+encodeURIComponent(m.graphMeetingId)+'?$select=body', {
+        headers:{ Authorization:'Bearer '+token }
+      });
+      if(resp.ok){
+        const ev = await resp.json();
+        document.getElementById('mtAgenda').value = htmlToPlainText(ev.body ? ev.body.content : '');
+      }
+    }catch(e){ console.error('Could not load existing agenda', e); }
   } else {
     document.getElementById('mtSubject').value = '';
     document.getElementById('mtDate').value = '';
@@ -2988,6 +3210,12 @@ function openMeetingModal(meetingId){
   }
   document.getElementById('meetingError').style.display = 'none';
   document.getElementById('meetingModal').classList.add('show');
+}
+function htmlToPlainText(html){
+  if(!html) return '';
+  const div = document.createElement('div');
+  div.innerHTML = html;
+  return (div.textContent || div.innerText || '').trim();
 }
 function closeMeetingModal(){ document.getElementById('meetingModal').classList.remove('show'); editingMeetingId = null; }
 async function getGraphToken(scopes){
@@ -3003,6 +3231,7 @@ async function submitMeeting(){
   const time = document.getElementById('mtTime').value;
   const duration = parseInt(document.getElementById('mtDuration').value, 10) || 30;
   const groupId = document.getElementById('mtGroup').value;
+  const agenda = document.getElementById('mtAgenda').value.trim();
   // Pull real invite addresses from the selected audience's members, so the
   // event actually shows on their calendars / they get a Teams invite —
   // not just a bare join link posted in chat.
@@ -3041,7 +3270,8 @@ async function submitMeeting(){
           subject,
           start:{ dateTime: start.toISOString(), timeZone:'UTC' },
           end:{ dateTime: end.toISOString(), timeZone:'UTC' },
-          attendees
+          attendees,
+          ...(agenda ? { body:{ contentType:'HTML', content: escapeHtml(agenda).replace(/\n/g,'<br>') } } : {})
         })
       });
       if(!resp.ok) throw new Error('Graph request failed: '+resp.status);
@@ -3065,7 +3295,8 @@ async function submitMeeting(){
           end:{ dateTime: end.toISOString(), timeZone:'UTC' },
           isOnlineMeeting: true,
           onlineMeetingProvider: 'teamsForBusiness',
-          attendees
+          attendees,
+          ...(agenda ? { body:{ contentType:'HTML', content: escapeHtml(agenda).replace(/\n/g,'<br>') } } : {})
         })
       });
       if(!resp.ok) throw new Error('Graph request failed: '+resp.status);
