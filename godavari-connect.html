@@ -735,10 +735,17 @@
       <div class="profile-avatar-big" id="gsAvatarPreview">G</div>
     </div>
     <div id="gsEditableBlock" style="display:none;">
+      <input type="file" id="gsPhotoInput" accept="image/*" style="display:none;" onchange="onGroupPhotoSelected(this)">
+      <div class="modal-actions" style="justify-content:center;gap:8px;margin:0 0 14px;">
+        <button type="button" class="btn-cancel" style="flex:none;padding:6px 12px;" onclick="document.getElementById('gsPhotoInput').click()">📷 Upload photo</button>
+        <button type="button" class="btn-cancel" id="gsRemovePhotoBtn" style="flex:none;padding:6px 12px;display:none;" onclick="removeGroupPhoto()">Remove photo</button>
+      </div>
+      <div class="settings-note" id="gsPhotoNote" style="display:none;"></div>
       <label>Group icon (emoji)</label>
       <div class="emoji-row" id="gsEmojiRow"></div>
       <label>Group Name</label>
       <input id="gsName" placeholder="Group name">
+      <div class="settings-note">Upload a real photo for the group, or fall back to an emoji icon — only Higher Authority can change this.</div>
       <div class="modal-actions">
         <button class="btn-cancel" onclick="closeGroupSettings()">Cancel</button>
         <button class="btn-submit" onclick="saveGroupSettings()">Save Changes</button>
@@ -1042,7 +1049,7 @@ function rebuildBranchesAndGroups(){
   Object.keys(groupOverrides).forEach(id=>{
     const g = GROUPS.find(x=>x.id===id);
     const o = groupOverrides[id];
-    if(g && o){ if(o.name) g.name = o.name; g.icon = o.icon || g.icon; }
+    if(g && o){ if(o.name) g.name = o.name; g.icon = o.icon || g.icon; g.photoItemId = o.photoItemId || g.photoItemId; }
   });
   if(!GROUPS.find(g=>g.id===activeGroupId)) activeGroupId = 'g_all';
 }
@@ -1146,6 +1153,18 @@ function stopLiveSync(){
    is a real row in SharePoint. Pass isRefresh=true for a periodic poll so
    those session-only bits (and any manual member-list overrides) aren't
    wiped out every few seconds — only a real login should reset them. */
+/* CustomGroups fetch tries to include PhotoItemId (needed for real group
+   photos); if that column hasn't been added to the SharePoint list yet,
+   Graph rejects the $select with a 400 for the WHOLE request — so this
+   retries once without it rather than taking down the entire app's data load. */
+async function fetchCustomGroupsSafe(){
+  try{
+    return await fetchAllListItems(APP_CONFIG.customGroupsListId, 'Title,Name,CG_Type,MemberIds,CreatedBy,Icon,PhotoItemId');
+  }catch(e){
+    console.warn('CustomGroups fetch with PhotoItemId failed — retrying without it. Add a "PhotoItemId" column (single line of text) to the CustomGroups SharePoint list to enable real group photos.', e);
+    return fetchAllListItems(APP_CONFIG.customGroupsListId, 'Title,Name,CG_Type,MemberIds,CreatedBy,Icon');
+  }
+}
 async function loadData(isRefresh){
   messages = {}; approvals = []; positions = []; customGroups = []; groupOverrides = {}; meetings = [];
   passwordResetRequests = [];
@@ -1155,7 +1174,7 @@ async function loadData(isRefresh){
       fetchAllListItems(APP_CONFIG.messagesListId, 'GroupId,SenderId,SenderName,Body,SentOn'),
       fetchAllListItems(APP_CONFIG.approvalsListId, 'Title,GroupId,RequesterId,A_Type,Details,Status,SubmittedOn'),
       fetchAllListItems(APP_CONFIG.positionsListId, 'BranchId,SubmittedBy,Data,SubmittedOn'),
-      fetchAllListItems(APP_CONFIG.customGroupsListId, 'Title,Name,CG_Type,MemberIds,CreatedBy,Icon'),
+      fetchCustomGroupsSafe(),
       meetingsListReady
         ? fetchAllListItems(APP_CONFIG.meetingsListId, 'Title,GroupId,OrganizerId,StartDateTime,EndDateTime,JoinUrl,GraphMeetingId,Status').catch(e=>{
             console.error('Meetings list fetch failed — check meetingsListId in APP_CONFIG. Pausing further attempts until reload.', e);
@@ -1253,13 +1272,13 @@ async function loadData(isRefresh){
     customGroups = realGroupRows.map(r=>{
       let memberIds = []; try{ memberIds = JSON.parse(r.MemberIds||'[]'); }catch(e){}
       return {
-        id: r.Title, name: r.Name, type: r.CG_Type, postRestricted:false, icon: r.Icon||'',
+        id: r.Title, name: r.Name, type: r.CG_Type, postRestricted:false, icon: r.Icon||'', photoItemId: r.PhotoItemId||'',
         sub: 'Custom group', memberIds, __itemId: r.__itemId
       };
     });
     customGroups.forEach(g=>{ messages[g.id] = messages[g.id] || []; });
     groupOverrides = {};
-    overrideRows.forEach(r=>{ groupOverrides[r.Title] = { name: r.Name, icon: r.Icon||'', __itemId: r.__itemId }; });
+    overrideRows.forEach(r=>{ groupOverrides[r.Title] = { name: r.Name, icon: r.Icon||'', photoItemId: r.PhotoItemId||'', __itemId: r.__itemId }; });
   }catch(e){
     console.error('loadData failed', e);
   }
@@ -1380,6 +1399,27 @@ async function uploadProfilePhoto(blob, employeeId){
   }catch(e){ /* folder already exists — fine */ }
   const fileName = `${employeeId}_${Date.now()}.jpg`;
   const resp = await fetch(`https://graph.microsoft.com/v1.0/sites/${APP_CONFIG.siteId}/drive/root:/ProfilePhotos/${encodeURIComponent(fileName)}:/content`, {
+    method:'PUT',
+    headers:{ Authorization:'Bearer '+token, 'Content-Type':'image/jpeg' },
+    body: blob
+  });
+  if(!resp.ok) throw new Error('Photo upload failed: '+resp.status);
+  const item = await resp.json();
+  return item.id;
+}
+/* Same idea as uploadProfilePhoto, but for group avatars — kept in its own
+   GroupPhotos folder on the SharePoint drive. */
+async function uploadGroupPhoto(blob, groupId){
+  const token = await getGraphToken(['Sites.ReadWrite.All']);
+  try{
+    await fetch(`https://graph.microsoft.com/v1.0/sites/${APP_CONFIG.siteId}/drive/root/children`, {
+      method:'POST',
+      headers:{ Authorization:'Bearer '+token, 'Content-Type':'application/json' },
+      body: JSON.stringify({ name:'GroupPhotos', folder:{}, '@microsoft.graph.conflictBehavior':'fail' })
+    });
+  }catch(e){ /* folder already exists — fine */ }
+  const fileName = `${groupId}_${Date.now()}.jpg`;
+  const resp = await fetch(`https://graph.microsoft.com/v1.0/sites/${APP_CONFIG.siteId}/drive/root:/GroupPhotos/${encodeURIComponent(fileName)}:/content`, {
     method:'PUT',
     headers:{ Authorization:'Bearer '+token, 'Content-Type':'image/jpeg' },
     body: blob
@@ -1601,6 +1641,7 @@ function renderGroupList(){
     const last = msgs[msgs.length-1];
     const avClass = g.type==='broadcast' ? 'broadcast' : '';
     const av = g.icon ? g.icon : g.type==='broadcast' ? '📣' : g.type==='celebration' ? '🎉' : g.name.split(' ').map(w=>w[0]).slice(0,2).join('');
+    const photoAttr = g.photoItemId ? ` data-photo-avatar="${g.photoItemId}"` : '';
     /* Unread badge lives ON the group row itself — exactly like WhatsApp —
        instead of a separate notification centre. It's per-viewer: a Manager
        switching in sees only what's unread for THEM in groups they belong to. */
@@ -1608,7 +1649,7 @@ function renderGroupList(){
     const isCircularLast = last && last.type==='circular';
     return `
     <div class="group-item ${g.id===activeGroupId?'active':''}" onclick="openGroup('${g.id}')">
-      <div class="g-avatar ${avClass}">${av}</div>
+      <div class="g-avatar ${avClass}"${photoAttr}>${av}</div>
       <div class="g-meta">
         <div class="g-top">
           <div class="g-name ${unread>0?'unread-name':''}">${g.postRestricted?'<span class="lock-icon">🔒</span>':''}${g.name}</div>
@@ -1623,6 +1664,7 @@ function renderGroupList(){
   }).join('');
   renderPinnedPosition();
   renderPinnedApprovals();
+  hydrateAvatarPhotos();
 }
 
 /* Pinned row for Approvals & Requests — mobile only. On PC/window mode the
@@ -1728,9 +1770,13 @@ function renderChat(){
   const g = GROUPS.find(x=>x.id===activeGroupId);
   document.getElementById('chatTitle').textContent = g.name;
   document.getElementById('chatSub').textContent = `${g.memberIds.length} members · ${g.sub}`;
-  document.getElementById('chatAvatar').textContent = g.icon ? g.icon : g.type==='broadcast'?'📣':g.type==='celebration'?'🎉':g.name[0];
+  const chatAvatarEl = document.getElementById('chatAvatar');
+  chatAvatarEl.textContent = g.icon ? g.icon : g.type==='broadcast'?'📣':g.type==='celebration'?'🎉':g.name[0];
+  if(g.photoItemId){ chatAvatarEl.setAttribute('data-photo-avatar', g.photoItemId); chatAvatarEl.removeAttribute('data-hydrated'); }
+  else { chatAvatarEl.removeAttribute('data-photo-avatar'); chatAvatarEl.removeAttribute('data-hydrated'); }
   renderGroupSettingsButton(g);
   document.getElementById('restrictedTag').innerHTML = g.postRestricted ? '<span class="post-restricted-tag">🔒 Only Higher Authority can post</span>' : '';
+  hydrateAvatarPhotos();
 
   const msgs = messages[g.id]||[];
   const box = document.getElementById('messages');
@@ -2251,58 +2297,131 @@ function renderGroupSettingsButton(g){
 }
 
 let gsSelectedIcon = '';
-function openGroupSettings(){
+let gsPendingPhotoBlob = null; // Blob (newly picked, not yet saved) | 'REMOVE' | null (no change)
+let gsPendingPhotoPreviewUrl = null;
+async function openGroupSettings(){
   const g = GROUPS.find(x=>x.id===activeGroupId);
   if(!isHigherAuthority(currentUserId)) return;
-  const av = g.icon ? g.icon : g.type==='broadcast'?'📣':g.type==='celebration'?'🎉':g.name[0];
-  const preview = document.getElementById('gsAvatarPreview');
-  preview.textContent = av;
-  preview.style.background = '';
+
+  gsSelectedIcon = g.icon || '';
+  gsPendingPhotoBlob = null;
+  if(gsPendingPhotoPreviewUrl){ URL.revokeObjectURL(gsPendingPhotoPreviewUrl); gsPendingPhotoPreviewUrl = null; }
 
   document.getElementById('gsEditableBlock').style.display = 'block';
   document.getElementById('gsReadOnlyBlock').style.display = 'none';
-
-  gsSelectedIcon = g.icon || '';
   document.getElementById('gsName').value = g.name;
-  document.getElementById('gsEmojiRow').innerHTML = ['','📣','🎉','💰','📈','🏦','🛡️','📋','⭐','🤝'].map(e=>
-    `<div class="emoji-opt ${gsSelectedIcon===e?'selected':''}" onclick="pickGsIcon('${e}')">${e || 'Aa'}</div>`
-  ).join('');
 
   const delBtnWrap = document.getElementById('gsDeleteWrap');
   if(delBtnWrap) delBtnWrap.style.display = isRealCustomGroup(g) ? 'flex' : 'none';
 
   document.getElementById('groupSettingsModal').classList.add('show');
+  renderGsModal();
+
+  // Existing saved photo — fetch and show it (async; guarded below against a
+  // meanwhile-closed/reopened modal or a photo picked while this was loading).
+  if(g.photoItemId && !gsPendingPhotoBlob){
+    const url = await getPhotoObjectUrl(g.photoItemId);
+    const stillSameGroup = activeGroupId===g.id && document.getElementById('groupSettingsModal').classList.contains('show');
+    if(url && stillSameGroup && gsPendingPhotoBlob===null){
+      document.getElementById('gsAvatarPreview').innerHTML = `<img src="${url}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;" alt="">`;
+      document.getElementById('gsRemovePhotoBtn').style.display = 'inline-block';
+    }
+  }
 }
-function pickGsIcon(e){ gsSelectedIcon = e; openGroupSettings(); }
+/* Redraws the emoji row, avatar preview and remove/upload note from current
+   in-memory state — used after picking an icon or a photo, WITHOUT resetting
+   pending photo selections the way a full re-open would. */
+function renderGsModal(){
+  const g = GROUPS.find(x=>x.id===activeGroupId);
+  const preview = document.getElementById('gsAvatarPreview');
+  const removeBtn = document.getElementById('gsRemovePhotoBtn');
+  const note = document.getElementById('gsPhotoNote');
+  const fallbackPreview = () => {
+    preview.style.background = '';
+    preview.textContent = gsSelectedIcon ? gsSelectedIcon : g.type==='broadcast'?'📣':g.type==='celebration'?'🎉':g.name[0];
+  };
+
+  if(gsPendingPhotoBlob instanceof Blob){
+    preview.style.background = '';
+    preview.innerHTML = `<img src="${gsPendingPhotoPreviewUrl}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;" alt="">`;
+    removeBtn.style.display = 'inline-block';
+    note.style.display = 'block'; note.textContent = 'New photo selected — click Save Changes to upload it.';
+  } else if(gsPendingPhotoBlob === 'REMOVE'){
+    fallbackPreview();
+    removeBtn.style.display = 'none';
+    note.style.display = 'block'; note.textContent = 'Photo will be removed when you click Save Changes.';
+  } else if(g.photoItemId){
+    // Show an icon placeholder immediately; openGroupSettings() swaps in the
+    // real photo asynchronously once it's fetched.
+    fallbackPreview();
+    removeBtn.style.display = 'inline-block';
+    note.style.display = 'none';
+  } else {
+    fallbackPreview();
+    removeBtn.style.display = 'none';
+    note.style.display = 'none';
+  }
+
+  document.getElementById('gsEmojiRow').innerHTML = ['','📣','🎉','💰','📈','🏦','🛡️','📋','⭐','🤝'].map(e=>
+    `<div class="emoji-opt ${gsSelectedIcon===e?'selected':''}" onclick="pickGsIcon('${e}')">${e || 'Aa'}</div>`
+  ).join('');
+}
+async function onGroupPhotoSelected(inputEl){
+  const file = inputEl.files && inputEl.files[0];
+  inputEl.value = '';
+  if(!file) return;
+  const note = document.getElementById('gsPhotoNote');
+  try{
+    const blob = await resizeImageFile(file, 500);
+    if(gsPendingPhotoPreviewUrl) URL.revokeObjectURL(gsPendingPhotoPreviewUrl);
+    gsPendingPhotoBlob = blob;
+    gsPendingPhotoPreviewUrl = URL.createObjectURL(blob);
+    renderGsModal();
+  }catch(e){
+    console.error(e);
+    note.style.display = 'block';
+    note.textContent = 'Couldn\u2019t read that photo — try a different image.';
+  }
+}
+function removeGroupPhoto(){
+  if(gsPendingPhotoPreviewUrl){ URL.revokeObjectURL(gsPendingPhotoPreviewUrl); gsPendingPhotoPreviewUrl = null; }
+  gsPendingPhotoBlob = 'REMOVE';
+  renderGsModal();
+}
+function pickGsIcon(e){ gsSelectedIcon = e; renderGsModal(); }
 function closeGroupSettings(){ document.getElementById('groupSettingsModal').classList.remove('show'); }
 
-/* Both create and patch calls include an Icon field, which needs a matching
-   "Icon" column on the CustomGroups SharePoint list. If that column hasn't
-   been added yet, Graph rejects the whole write with a 400 — these wrappers
-   catch that and silently retry without Icon, so renaming still works even
-   before the column exists; only the icon itself won't stick until it does. */
+/* Both create and patch calls may include Icon and/or PhotoItemId fields,
+   which need matching columns on the CustomGroups SharePoint list. If a
+   column hasn't been added yet, Graph rejects the whole write with a 400 —
+   these wrappers catch that and retry with that optional field progressively
+   dropped, so the rest (name, membership, etc.) still saves even before the
+   column exists; only that one piece won't persist until it does. */
+const GROUP_ROW_OPTIONAL_FIELDS = ['Icon','PhotoItemId'];
 async function createListItemIconSafe(listId, fields){
-  try{
-    return { item: await createListItem(listId, fields), iconSaved: true };
-  }catch(e){
-    if('Icon' in fields){
-      const rest = Object.assign({}, fields); delete rest.Icon;
-      return { item: await createListItem(listId, rest), iconSaved: false };
+  let current = Object.assign({}, fields);
+  while(true){
+    try{
+      const item = await createListItem(listId, current);
+      return { item, iconSaved: 'Icon' in current, photoSaved: 'PhotoItemId' in current };
+    }catch(e){
+      const key = GROUP_ROW_OPTIONAL_FIELDS.find(k=>k in current);
+      if(!key) throw e;
+      delete current[key];
     }
-    throw e;
   }
 }
 async function patchListItemIconSafe(listId, itemId, fields){
-  try{
-    await patchListItemFields(listId, itemId, fields);
-    return true;
-  }catch(e){
-    if('Icon' in fields){
-      const rest = Object.assign({}, fields); delete rest.Icon;
-      await patchListItemFields(listId, itemId, rest);
-      return false;
+  let current = Object.assign({}, fields);
+  while(true){
+    try{
+      await patchListItemFields(listId, itemId, current);
+      return { iconSaved: 'Icon' in current, photoSaved: 'PhotoItemId' in current };
+    }catch(e){
+      const key = GROUP_ROW_OPTIONAL_FIELDS.find(k=>k in current);
+      if(!key) throw e;
+      delete current[key];
     }
-    throw e;
   }
 }
 
@@ -2311,35 +2430,59 @@ async function saveGroupSettings(){
   const newName = document.getElementById('gsName').value.trim();
   if(!newName){ alert('Group name can\u2019t be empty.'); return; }
   const cg = customGroups.find(c=>c.id===g.id);
+  const saveBtn = document.querySelector('#gsEditableBlock .btn-submit');
+  const originalBtnText = saveBtn ? saveBtn.textContent : '';
   try{
-    let iconSaved = true;
+    // Resolve the photo first: upload a newly picked one, clear it on remove,
+    // or just carry forward whatever the group already had.
+    let newPhotoItemId = g.photoItemId || '';
+    if(gsPendingPhotoBlob instanceof Blob){
+      if(saveBtn){ saveBtn.disabled = true; saveBtn.textContent = 'Uploading photo…'; }
+      newPhotoItemId = await uploadGroupPhoto(gsPendingPhotoBlob, g.id);
+      photoBlobCache[newPhotoItemId] = gsPendingPhotoPreviewUrl; // already have it locally — skip an immediate re-fetch
+    } else if(gsPendingPhotoBlob === 'REMOVE'){
+      newPhotoItemId = '';
+    }
+    if(saveBtn){ saveBtn.textContent = 'Saving…'; }
+
+    let iconSaved = true, photoSaved = true;
     if(cg && cg.__itemId){
       // Real custom group — patch its own row directly.
-      iconSaved = await patchListItemIconSafe(APP_CONFIG.customGroupsListId, cg.__itemId, { Name: newName, Icon: gsSelectedIcon || '' });
-      cg.name = newName; cg.icon = iconSaved ? (gsSelectedIcon||'') : cg.icon;
+      ({iconSaved, photoSaved} = await patchListItemIconSafe(APP_CONFIG.customGroupsListId, cg.__itemId, { Name: newName, Icon: gsSelectedIcon || '', PhotoItemId: newPhotoItemId }));
+      cg.name = newName; cg.icon = iconSaved ? (gsSelectedIcon||'') : cg.icon; cg.photoItemId = photoSaved ? newPhotoItemId : cg.photoItemId;
     } else {
       // Base/branch group — patch or create its override row.
       const existing = groupOverrides[g.id];
       if(existing && existing.__itemId){
-        iconSaved = await patchListItemIconSafe(APP_CONFIG.customGroupsListId, existing.__itemId, { Name: newName, Icon: gsSelectedIcon || '' });
-        groupOverrides[g.id] = { name: newName, icon: iconSaved ? (gsSelectedIcon||'') : existing.icon, __itemId: existing.__itemId };
+        ({iconSaved, photoSaved} = await patchListItemIconSafe(APP_CONFIG.customGroupsListId, existing.__itemId, { Name: newName, Icon: gsSelectedIcon || '', PhotoItemId: newPhotoItemId }));
+        groupOverrides[g.id] = { name: newName, icon: iconSaved ? (gsSelectedIcon||'') : existing.icon, photoItemId: photoSaved ? newPhotoItemId : existing.photoItemId, __itemId: existing.__itemId };
       } else {
         const res = await createListItemIconSafe(APP_CONFIG.customGroupsListId, {
-          Title: g.id, Name: newName, CG_Type: 'custom', Icon: gsSelectedIcon || '', MemberIds: '[]', CreatedBy: currentUserId
+          Title: g.id, Name: newName, CG_Type: 'custom', Icon: gsSelectedIcon || '', PhotoItemId: newPhotoItemId, MemberIds: '[]', CreatedBy: currentUserId
         });
-        iconSaved = res.iconSaved;
-        groupOverrides[g.id] = { name: newName, icon: iconSaved ? (gsSelectedIcon||'') : '', __itemId: res.item.id };
+        iconSaved = res.iconSaved; photoSaved = res.photoSaved;
+        groupOverrides[g.id] = { name: newName, icon: iconSaved ? (gsSelectedIcon||'') : '', photoItemId: photoSaved ? newPhotoItemId : '', __itemId: res.item.id };
       }
     }
-    g.name = newName; g.icon = iconSaved ? (gsSelectedIcon||'') : g.icon;
+    g.name = newName;
+    g.icon = iconSaved ? (gsSelectedIcon||'') : g.icon;
+    g.photoItemId = photoSaved ? newPhotoItemId : g.photoItemId;
+    gsPendingPhotoBlob = null;
+    gsPendingPhotoPreviewUrl = null;
     closeGroupSettings();
     renderAll();
     if(!iconSaved){
       console.warn('Group name saved, but the icon didn\u2019t persist — add an "Icon" column (single line of text) to the CustomGroups SharePoint list.');
     }
+    if(!photoSaved){
+      console.warn('Group name saved, but the photo didn\u2019t persist — add a "PhotoItemId" column (single line of text) to the CustomGroups SharePoint list.');
+      alert('Group saved, but the photo couldn\u2019t be attached yet — ask your admin to add a "PhotoItemId" column to the CustomGroups SharePoint list, then try the photo again.');
+    }
   }catch(e){
     console.error(e);
     alert('Couldn\u2019t save group settings to SharePoint — check your connection and try again.');
+  }finally{
+    if(saveBtn){ saveBtn.disabled = false; saveBtn.textContent = originalBtnText || 'Save Changes'; }
   }
 }
 
@@ -2467,20 +2610,21 @@ async function generatePositionGroups(missing){
       const existingOverride = groupOverrides[gid];
       const savedName = (existingOverride && existingOverride.name) || (b.name+' – Position Group');
       const savedIcon = (existingOverride && existingOverride.icon) || '🏢';
+      const savedPhotoItemId = (existingOverride && existingOverride.photoItemId) || '';
       let res;
       if(existingOverride && existingOverride.__itemId){
-        const iconSaved = await patchListItemIconSafe(APP_CONFIG.customGroupsListId, existingOverride.__itemId, { Name: savedName, CG_Type: 'branch', Icon: savedIcon, MemberIds: JSON.stringify(memberIds), CreatedBy: currentUserId });
-        res = { item:{ id: existingOverride.__itemId }, iconSaved };
+        const {iconSaved, photoSaved} = await patchListItemIconSafe(APP_CONFIG.customGroupsListId, existingOverride.__itemId, { Name: savedName, CG_Type: 'branch', Icon: savedIcon, PhotoItemId: savedPhotoItemId, MemberIds: JSON.stringify(memberIds), CreatedBy: currentUserId });
+        res = { item:{ id: existingOverride.__itemId }, iconSaved, photoSaved };
         delete groupOverrides[gid];
       } else {
         res = await createListItemIconSafe(APP_CONFIG.customGroupsListId, {
-          Title: gid, Name: savedName, CG_Type: 'branch', Icon: savedIcon,
+          Title: gid, Name: savedName, CG_Type: 'branch', Icon: savedIcon, PhotoItemId: savedPhotoItemId,
           MemberIds: JSON.stringify(memberIds), CreatedBy: currentUserId
         });
       }
       customGroups.push({
         id: gid, name: savedName, type: 'branch', postRestricted:false,
-        icon: res.iconSaved ? savedIcon : '', sub: 'Branch position group', memberIds, __itemId: res.item.id
+        icon: res.iconSaved ? savedIcon : '', photoItemId: res.photoSaved ? savedPhotoItemId : '', sub: 'Branch position group', memberIds, __itemId: res.item.id
       });
       messages[gid] = messages[gid] || [];
       createdCount++;
@@ -2530,6 +2674,7 @@ async function submitCreateGroup(){
     type: document.getElementById('ngType').value,
     postRestricted:false,
     icon: '',
+    photoItemId: '',
     sub: 'Created by '+getUser(currentUserId).name,
     memberIds: [...ngSelected]
   };
