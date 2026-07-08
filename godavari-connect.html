@@ -65,9 +65,11 @@
     padding:6px 8px;font-size:13px;
   }
   .userchip{
-    background:#0e4a40;padding:5px 10px;border-radius:20px;font-size:12.5px;
-    display:flex;align-items:center;gap:6px;border:1px solid #1d6f5f;
+    position:relative;padding:2px;border-radius:50%;display:flex;align-items:center;
   }
+  .topbar-avatar{width:34px;height:34px;border-radius:50%;background:linear-gradient(135deg,var(--teal-mid),var(--teal-dark));
+    color:#fff;display:flex;align-items:center;justify-content:center;font-size:12.5px;font-weight:700;flex-shrink:0;overflow:hidden;border:2px solid rgba(255,255,255,.35);}
+  .topbar-dot{position:absolute;bottom:0;right:0;border:2px solid var(--teal-dark);}
   .dot-live{width:7px;height:7px;border-radius:50%;background:var(--leaf-bright);box-shadow:0 0 0 2px rgba(47,196,157,.25);}
 
   /* MAIN LAYOUT */
@@ -193,12 +195,15 @@
   .attachment-image{max-width:220px;border-radius:8px;display:block;margin-top:2px;}
   .attachment-media-wrap{position:relative;max-width:220px;margin-top:2px;}
   .attachment-media-wrap .attachment-image{margin-top:0;}
-  .attachment-dl-btn{
-    position:absolute;bottom:6px;right:6px;width:30px;height:30px;border-radius:50%;
-    background:rgba(0,0,0,.55);color:#fff;display:flex;align-items:center;justify-content:center;
-    font-size:15px;text-decoration:none;border:1px solid rgba(255,255,255,.4);
-  }
-  .attachment-dl-btn:hover{background:rgba(0,0,0,.75);}
+  .attachment-loading{font-size:11.5px;color:var(--muted);padding:14px 10px;background:#f2f0e8;border-radius:8px;min-width:160px;text-align:center;}
+  .attachment-actions{position:absolute;bottom:6px;right:6px;display:flex;gap:6px;}
+  .attach-icon-btn{border:none;color:#fff;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;font-family:inherit;}
+  .attachment-actions .attach-icon-btn{width:30px;height:30px;border-radius:50%;font-size:14px;background:rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.4);}
+  .attachment-actions .attach-icon-btn:hover{background:rgba(0,0,0,.75);}
+  .attachment-chip-wrap{display:flex;align-items:center;gap:8px;background:#f7f5ee;border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-top:2px;}
+  .attachment-chip-wrap .attach-icon-btn{width:28px;height:28px;border-radius:50%;font-size:13px;}
+  .attachment-chip-wrap .attach-icon-btn.dl{background:var(--teal-dark);}
+  .attachment-chip-wrap .attach-icon-btn.share{background:#3a6ea5;}
   /* ============ MESSAGE STATUS TICKS (sent/delivered) ============ */
   .tick{font-size:12px;color:var(--muted);letter-spacing:-2px;margin-left:1px;}
   .tick.read{color:#34a1f2;} /* blue, WhatsApp-style, once we know it's been seen */
@@ -445,7 +450,6 @@
     .desktop-positions-btn{display:none;}
     .rs-label{display:none;}
     .role-switch select{max-width:132px;font-size:11.5px;padding:6px 5px;}
-    .userchip{display:none;}
     .chat-back-btn{display:inline-flex;align-items:center;}
 
     /* Right-hand action cluster: icon-only chips so the header never overflows,
@@ -578,6 +582,9 @@
   .logout-btn{background:#c23b22;border:1px solid #8f2a18;color:#fff;border-radius:8px;padding:6px 11px;font-size:12px;font-weight:700;cursor:pointer;}
   .logout-btn:hover{background:#a83019;}
   .meeting-btn{background:#0e4a40;color:#fff;border:1px solid #1d6f5f;border-radius:8px;padding:7px 12px;font-size:12.5px;font-weight:700;cursor:pointer;}
+  .icon-only-btn{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0;text-decoration:none;}
+  .outlook-btn{background:#0078d4;border:1px solid #005a9e;}
+  .outlook-btn:hover{background:#106ebe;}
 </style>
 </head>
 <body>
@@ -633,7 +640,9 @@
   <div style="display:flex;align-items:center;gap:12px;">
     <span class="sync-badge checking" id="syncBadge" onclick="retrySync()" title="SharePoint / Graph connection status">⏳<span class="btn-label"> Checking…</span></span>
     <button id="positionsBtn" class="desktop-positions-btn" onclick="openPositions()" style="background:#0e4a40;color:#fff;border:1px solid #1d6f5f;border-radius:8px;padding:7px 12px;font-size:12.5px;font-weight:700;cursor:pointer;">📊 Bank Positions</button>
-    <a href="https://outlook.office.com/mail/deeplink/compose" target="_blank" rel="noopener" class="meeting-btn" title="Compose a new email in Outlook" style="text-decoration:none;display:inline-flex;align-items:center;">📧<span class="btn-label"> Outlook</span></a>
+    <a href="https://outlook.office.com/mail/deeplink/compose" target="_blank" rel="noopener" class="icon-only-btn outlook-btn" title="Compose a new email in Outlook" aria-label="Compose in Outlook">
+      <svg viewBox="0 0 24 24" width="17" height="17" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="2" y="5" width="20" height="14" rx="2.5" fill="#fff" fill-opacity=".15"/><path d="M2 6.5L12 13l10-6.5" stroke="#fff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><rect x="2" y="5" width="20" height="14" rx="2.5" stroke="#fff" stroke-width="1.4"/></svg>
+    </a>
     <div id="meetingBtnWrap"></div>
     <div class="userchip" id="currentUserChip" title="View / edit your profile" onclick="openMyProfile()" style="cursor:pointer;"></div>
     <button class="logout-btn" onclick="confirmLogout()" title="Logout" aria-label="Logout">⏻<span class="btn-label"> Logout</span></button>
@@ -907,7 +916,7 @@
   <div class="apo-body" id="apoBody"></div>
   <div class="apo-footer">
     <input type="text" id="apoCaption" placeholder="Add a caption..." onkeydown="if(event.key==='Enter')sendPendingAttachment()">
-    <button class="apo-send" onclick="sendPendingAttachment()" title="Send">➤</button>
+    <button class="apo-send" id="apoSendBtn" onclick="sendPendingAttachment()" title="Send">➤</button>
   </div>
 </div>
 
@@ -1441,12 +1450,155 @@ async function uploadGroupPhoto(blob, groupId){
   return item.id;
 }
 
+/* ============ CHAT ATTACHMENTS (real files in SharePoint, not base64-in-a-textbox) ============
+   Every chat attachment (photo, video, or document) is uploaded as a real
+   file into a "ChatAttachments" folder on this site's SharePoint drive —
+   exactly the same drive already used for profile/group photos. Only a
+   tiny pointer {name, size, mime, driveItemId, webUrl} is stored in the
+   Messages list, so file size is never limited by SharePoint's text-column
+   cap, and the file can always be fetched back and downloaded/shared. */
+const attachmentBlobCache = photoBlobCache; // same drive, same cache — an item id is an item id
+async function ensureChatAttachmentsFolder(token){
+  try{
+    await fetch(`https://graph.microsoft.com/v1.0/sites/${APP_CONFIG.siteId}/drive/root/children`, {
+      method:'POST',
+      headers:{ Authorization:'Bearer '+token, 'Content-Type':'application/json' },
+      body: JSON.stringify({ name:'ChatAttachments', folder:{}, '@microsoft.graph.conflictBehavior':'fail' })
+    });
+  }catch(e){ /* folder already exists — fine */ }
+}
+async function uploadChatAttachment(file){
+  const token = await getGraphToken(['Sites.ReadWrite.All']);
+  await ensureChatAttachmentsFolder(token);
+  const safeName = `${Date.now()}_${file.name}`.replace(/[#%*:<>?/\\{|}"]/g,'_');
+  const path = `ChatAttachments/${encodeURIComponent(safeName)}`;
+  if(file.size <= 4*1024*1024){
+    // Simple upload — fine for anything up to 4MB (Graph's limit for a single PUT).
+    const resp = await fetch(`https://graph.microsoft.com/v1.0/sites/${APP_CONFIG.siteId}/drive/root:/${path}:/content`, {
+      method:'PUT',
+      headers:{ Authorization:'Bearer '+token, 'Content-Type': file.type || 'application/octet-stream' },
+      body: file
+    });
+    if(!resp.ok) throw new Error('Attachment upload failed: '+resp.status);
+    const item = await resp.json();
+    return { itemId: item.id, webUrl: item.webUrl };
+  }
+  // Larger files (phone videos, big PDFs) need a resumable upload session —
+  // Graph requires this above 4MB, uploaded in chunks that are a multiple of 320KiB.
+  const sessionResp = await fetch(`https://graph.microsoft.com/v1.0/sites/${APP_CONFIG.siteId}/drive/root:/${path}:/createUploadSession`, {
+    method:'POST',
+    headers:{ Authorization:'Bearer '+token, 'Content-Type':'application/json' },
+    body: JSON.stringify({ item:{ '@microsoft.graph.conflictBehavior':'rename' } })
+  });
+  if(!sessionResp.ok) throw new Error('Could not start upload session: '+sessionResp.status);
+  const session = await sessionResp.json();
+  const uploadUrl = session.uploadUrl;
+  const chunkSize = 5 * 320 * 1024; // 1,600 KiB — a safe multiple of Graph's required 320 KiB
+  let start = 0, finalItem = null;
+  while(start < file.size){
+    const end = Math.min(start + chunkSize, file.size);
+    const chunk = file.slice(start, end);
+    const resp = await fetch(uploadUrl, {
+      method:'PUT',
+      headers:{ 'Content-Length': String(end-start), 'Content-Range': `bytes ${start}-${end-1}/${file.size}` },
+      body: chunk
+    });
+    if(!resp.ok && resp.status!==202) throw new Error('Chunk upload failed: '+resp.status);
+    if(resp.status!==202) finalItem = await resp.json();
+    start = end;
+  }
+  return { itemId: finalItem.id, webUrl: finalItem.webUrl };
+}
+/* Finds every attachment placeholder waiting on its real photo/video and
+   fills it in once fetched — same hydrate-after-render pattern as avatars. */
+function hydrateChatAttachments(){
+  document.querySelectorAll('[data-kind]:not([data-hydrated])').forEach(async el=>{
+    const itemId = el.getAttribute('data-item-id');
+    const kind = el.getAttribute('data-kind');
+    el.setAttribute('data-hydrated','1');
+    if(!itemId || (kind!=='image' && kind!=='video')) return; // doc chips need no preview fetch
+    const loadingEl = el.querySelector('.attachment-loading');
+    const url = await getPhotoObjectUrl(itemId);
+    const mediaEl = el.querySelector(kind==='image' ? 'img' : 'video');
+    if(url && mediaEl){
+      mediaEl.src = url;
+      mediaEl.style.display = 'block';
+      if(loadingEl) loadingEl.remove();
+    } else if(loadingEl){
+      loadingEl.textContent = 'Couldn\u2019t load preview — download still works below';
+    }
+  });
+}
+async function downloadChatAttachment(itemId, name){
+  if(!itemId){ alert('This file was sent before the attachment fix and can\u2019t be recovered — ask the sender to resend it.'); return; }
+  try{
+    const url = await getPhotoObjectUrl(itemId);
+    if(!url) throw new Error('No blob returned');
+    const a = document.createElement('a');
+    a.href = url; a.download = name || 'file';
+    document.body.appendChild(a); a.click(); a.remove();
+  }catch(e){
+    console.error(e);
+    alert('Couldn\u2019t download this file — check your connection and try again.');
+  }
+}
+/* Real WhatsApp-style share: hands the actual file to the device's native
+   share sheet (WhatsApp/Outlook/Teams/etc. all show up there) when the
+   browser supports it; otherwise shares the SharePoint link, falling back
+   to copy-to-clipboard on browsers with no Web Share API at all. */
+async function shareChatAttachment(itemId, name, mime, webUrl){
+  try{
+    if(navigator.share){
+      if(itemId && navigator.canShare){
+        const url = await getPhotoObjectUrl(itemId);
+        if(url){
+          const blob = await (await fetch(url)).blob();
+          const file = new File([blob], name||'file', { type: mime||blob.type });
+          if(navigator.canShare({ files:[file] })){
+            await navigator.share({ files:[file], title: name||'Shared file' });
+            return;
+          }
+        }
+      }
+      if(webUrl){ await navigator.share({ title: name||'Shared file', url: webUrl }); return; }
+    }
+    if(webUrl){
+      await navigator.clipboard.writeText(webUrl);
+      alert('Link copied — paste it into WhatsApp, Outlook, Teams, or anywhere else.');
+    } else {
+      alert('Sharing isn\u2019t supported for this file on this browser — try the download button instead.');
+    }
+  }catch(e){
+    if(e && e.name==='AbortError') return; // user closed the share sheet — not an error
+    console.error(e);
+    alert('Couldn\u2019t share this file.');
+  }
+}
+document.addEventListener('click', async (ev)=>{
+  const dlBtn = ev.target.closest('.attach-download-action');
+  if(dlBtn){
+    ev.preventDefault(); ev.stopPropagation();
+    const wrap = dlBtn.closest('[data-kind]');
+    if(wrap) downloadChatAttachment(wrap.getAttribute('data-item-id'), wrap.getAttribute('data-name'));
+    return;
+  }
+  const shareBtn = ev.target.closest('.attach-share-action');
+  if(shareBtn){
+    ev.preventDefault(); ev.stopPropagation();
+    const wrap = shareBtn.closest('[data-kind]');
+    if(wrap) shareChatAttachment(wrap.getAttribute('data-item-id'), wrap.getAttribute('data-name'), wrap.getAttribute('data-mime'), wrap.getAttribute('data-weburl'));
+  }
+});
+
 /* ============ CURRENT USER CHIP (real signed-in identity, no more "viewing as" demo switch) ============ */
 function renderCurrentUserChip(){
   const chip = document.getElementById('currentUserChip');
   if(!chip) return;
   const u = getUser(currentUserId);
-  chip.innerHTML = u ? `<span class="dot-live"></span><span>${escapeHtml(u.name)} · ${escapeHtml(u.role)}</span>` : '';
+  if(!u){ chip.innerHTML=''; return; }
+  chip.title = `${u.name} · ${u.role} — tap to view your profile`;
+  chip.innerHTML = `${userAvatarHtml(u,'topbar-avatar')}<span class="dot-live topbar-dot"></span>`;
+  hydrateAvatarPhotos();
 }
 
 /* ============ PROFILE (own = editable avatar; a colleague's = read-only view) ============ */
@@ -1798,6 +1950,7 @@ function renderChat(){
   const wasNearBottom = (box.scrollHeight - box.scrollTop - box.clientHeight) < 120;
   box.innerHTML = '<div class="day-divider">Today</div>' + msgs.map(m=>renderMessage(m, g)).join('');
   if(wasNearBottom) box.scrollTop = box.scrollHeight;
+  hydrateChatAttachments();
 
   renderInputArea(g);
 }
@@ -1816,21 +1969,42 @@ function renderMessage(m, g){
   let attachmentHtml = '';
   if(isAttachment && m.attachment){
     const a = m.attachment;
-    if(a.mime && a.mime.startsWith('image/')){
-      attachmentHtml = `<div class="attachment-media-wrap">
-        <img class="attachment-image" src="${a.dataUrl}" alt="${escapeHtml(a.name)}">
-        <a class="attachment-dl-btn" href="${a.dataUrl}" download="${escapeHtml(a.name)}" title="Download photo" onclick="event.stopPropagation();">⬇</a>
+    const isImg = a.mime && a.mime.startsWith('image/');
+    const isVid = a.mime && a.mime.startsWith('video/');
+    const dataAttrs = `data-item-id="${escapeHtml(a.driveItemId||'')}" data-mime="${escapeHtml(a.mime||'')}" data-name="${escapeHtml(a.name||'file')}" data-weburl="${escapeHtml(a.webUrl||'')}"`;
+    if(!a.driveItemId){
+      // Sent before the real file-storage fix — the old base64 copy was too big
+      // for the SharePoint text column and got silently dropped, so there's
+      // nothing left to download. Nothing to do here except say so honestly.
+      attachmentHtml = `<div class="attachment-chip-wrap" style="opacity:.75;">
+        <span class="ac-icon">⚠️</span>
+        <span><div class="ac-name">${escapeHtml(a.name||'File')}</div><div class="ac-size">Sent before the file fix — please ask ${escapeHtml(u.name)} to resend</div></span>
       </div>`;
-    } else if(a.mime && a.mime.startsWith('video/')){
-      attachmentHtml = `<div class="attachment-media-wrap">
-        <video class="attachment-image" src="${a.dataUrl}" controls></video>
-        <a class="attachment-dl-btn" href="${a.dataUrl}" download="${escapeHtml(a.name)}" title="Download video" onclick="event.stopPropagation();">⬇</a>
+    } else if(isImg){
+      attachmentHtml = `<div class="attachment-media-wrap" ${dataAttrs} data-kind="image">
+        <div class="attachment-loading">Loading photo…</div>
+        <img class="attachment-image" style="display:none;" alt="${escapeHtml(a.name)}">
+        <div class="attachment-actions">
+          <button type="button" class="attach-icon-btn attach-download-action" title="Download photo">⬇</button>
+          <button type="button" class="attach-icon-btn attach-share-action" title="Share photo">↗</button>
+        </div>
+      </div>`;
+    } else if(isVid){
+      attachmentHtml = `<div class="attachment-media-wrap" ${dataAttrs} data-kind="video">
+        <div class="attachment-loading">Loading video…</div>
+        <video class="attachment-image" style="display:none;" controls></video>
+        <div class="attachment-actions">
+          <button type="button" class="attach-icon-btn attach-download-action" title="Download video">⬇</button>
+          <button type="button" class="attach-icon-btn attach-share-action" title="Share video">↗</button>
+        </div>
       </div>`;
     } else {
-      attachmentHtml = `<a class="attachment-chip" href="${a.dataUrl}" download="${escapeHtml(a.name)}">
+      attachmentHtml = `<div class="attachment-chip-wrap" ${dataAttrs} data-kind="doc">
         <span class="ac-icon">📄</span>
-        <span><div class="ac-name">${escapeHtml(a.name)}</div><div class="ac-size">${fmtSize(a.size)} · tap to download</div></span>
-      </a>`;
+        <span style="flex:1;min-width:0;"><div class="ac-name">${escapeHtml(a.name)}</div><div class="ac-size">${fmtSize(a.size)}</div></span>
+        <button type="button" class="attach-icon-btn dl attach-download-action" title="Download">⬇</button>
+        <button type="button" class="attach-icon-btn share attach-share-action" title="Share">↗</button>
+      </div>`;
     }
   }
   let positionHtml = '';
@@ -1932,7 +2106,10 @@ function handleFileSelected(event){
   if(!file) return;
   const reader = new FileReader();
   reader.onload = ()=>{
-    pendingAttachment = { name:file.name, size:file.size, mime:file.type, dataUrl: reader.result };
+    // dataUrl here is ONLY for the local preview screen below — the actual
+    // send uploads the real `file` to SharePoint's drive so it can be any
+    // size and stay downloadable (see sendPendingAttachment).
+    pendingAttachment = { name:file.name, size:file.size, mime:file.type, dataUrl: reader.result, file: file };
     openAttachPreview();
   };
   reader.readAsDataURL(file);
@@ -2005,15 +2182,28 @@ async function sendPendingAttachment(){
   if(!pendingAttachment) return;
   const g = GROUPS.find(x=>x.id===activeGroupId);
   const caption = document.getElementById('apoCaption').value.trim();
-  const attachment = pendingAttachment;
-  pendingAttachment = null;
-  document.getElementById('attachPreviewOverlay').classList.remove('show');
+  const staged = pendingAttachment;
+  const sendBtn = document.getElementById('apoSendBtn');
+  if(sendBtn){ sendBtn.disabled = true; sendBtn.textContent = '⏳'; }
   try{
+    // Real file upload to the site's SharePoint drive (same drive already used
+    // for profile/group photos) — this is what actually fixes "can't download":
+    // previously the whole file was base64-embedded straight into the Messages
+    // list, and anything past ~60KB of text silently got its file data dropped.
+    // Now only a small {name,size,mime,driveItemId} pointer goes into the list,
+    // so any file size works and the real bytes always live in SharePoint.
+    const { itemId, webUrl } = await uploadChatAttachment(staged.file);
+    attachmentBlobCache[itemId] = staged.dataUrl; // we already have it locally — skip re-fetching what we just sent
+    const attachment = { name: staged.name, size: staged.size, mime: staged.mime, driveItemId: itemId, webUrl };
+    pendingAttachment = null;
+    document.getElementById('attachPreviewOverlay').classList.remove('show');
     await postMessageToGroup(g.id, { text: caption, type:'attachment', attachment });
   }catch(e){
     console.error(e);
     alert('Couldn\u2019t send the attachment — check your connection and try again.');
     return;
+  }finally{
+    if(sendBtn){ sendBtn.disabled = false; sendBtn.textContent = '➤'; }
   }
   renderChat();
   renderGroupList();
