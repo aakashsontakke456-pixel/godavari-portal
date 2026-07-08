@@ -586,6 +586,16 @@
   .icon-only-btn{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0;text-decoration:none;}
   .outlook-btn{background:#0078d4;border:1px solid #005a9e;}
   .outlook-btn:hover{background:#106ebe;}
+  /* Teams deep-link — real Teams brand purple, distinct from Outlook's blue so
+     the two "leave the app for a moment" actions read differently at a glance. */
+  .teams-btn{background:#5b5fc7;border:1px solid #4649a3;}
+  .teams-btn:hover{background:#4649a3;}
+  .teams-btn:disabled{opacity:.35;cursor:not-allowed;}
+  /* Small icon-only Teams button used inline in member rows / profile — same
+     idea as .remove-btn but a purple round chip instead of text. */
+  .member-teams-btn{width:26px;height:26px;border-radius:50%;background:#5b5fc7;border:none;display:flex;align-items:center;justify-content:center;flex-shrink:0;cursor:pointer;padding:0;}
+  .member-teams-btn:hover{background:#4649a3;}
+  .member-teams-btn svg{width:14px;height:14px;}
 </style>
 </head>
 <body>
@@ -793,6 +803,10 @@
       <div class="profile-avatar-big" id="profAvatarPreview">?</div>
       <div class="profile-name" id="profName"></div>
       <div class="profile-sub" id="profRoleTag"></div>
+      <button id="profTeamsBtn" class="teams-btn" style="display:none;margin-top:10px;border-radius:8px;padding:7px 14px;font-size:12.5px;font-weight:700;color:#fff;cursor:pointer;align-items:center;gap:6px;" onclick="openTeamsChatForProfile()">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" xmlns="http://www.w3.org/2000/svg" style="vertical-align:-2px;margin-right:4px;"><path d="M16.5 7.5a3 3 0 1 0-2.9-3.75h.01A3 3 0 0 0 16.5 7.5Zm-6 1.5a3.75 3.75 0 1 0-3.75-3.75A3.75 3.75 0 0 0 10.5 9Zm7.88.75h-3.13a3.63 3.63 0 0 0-1.02.15 5.24 5.24 0 0 1 1.02 3.1v4.25c0 .3-.03.58-.08.85h3.46A1.87 1.87 0 0 0 20.5 16.2v-3.08a3.87 3.87 0 0 0-2.12-3.87ZM14.25 13.5a3.75 3.75 0 0 0-3.75-3.75H6.75A3.75 3.75 0 0 0 3 13.5v3.38A2.63 2.63 0 0 0 5.63 19.5h5.99a2.63 2.63 0 0 0 2.63-2.63V13.5Z" fill="#fff"/></svg>
+        Chat in Teams
+      </button>
     </div>
     <div id="profEditBlock" style="display:none;">
       <input type="file" id="profPhotoInput" accept="image/*" style="display:none;" onchange="onProfilePhotoSelected(this)">
@@ -850,7 +864,9 @@
   <div class="modal" style="width:min(880px,94vw);max-height:86vh;overflow-y:auto;">
     <h3 style="display:flex;justify-content:space-between;align-items:center;">
       <span style="display:flex;align-items:center;"><button class="chat-back-btn" onclick="closePositions()" aria-label="Back" style="margin-right:8px;">←</button>📊 Daily Bank Positions — Today</span>
-      <button class="btn-cancel" style="flex:none;padding:6px 12px;" onclick="closePositions()">✕</button>
+      <span style="display:flex;gap:8px;">
+        <button class="btn-cancel" style="flex:none;padding:6px 12px;" onclick="closePositions()">✕</button>
+      </span>
     </h3>
     <div id="positionsBody"></div>
   </div>
@@ -1649,6 +1665,11 @@ async function renderProfileModal(){
   document.getElementById('profBranch').textContent = u.branch || '—';
   document.getElementById('profTitle').textContent = u.title || '—';
 
+  // Teams deep-link — only makes sense on a colleague's profile (not your
+  // own) and only if their M365 email/UPN is on file in EmployeeDirectory.
+  const profTeamsBtn = document.getElementById('profTeamsBtn');
+  if(profTeamsBtn) profTeamsBtn.style.display = (!editable && u.upn) ? 'inline-flex' : 'none';
+
   const fbPreview = document.getElementById('profFallbackPreview');
   if(fbPreview){ fbPreview.style.background = profSelectedColor || '#888'; fbPreview.textContent = profSelectedEmoji || 'Aa'; }
   const preview = document.getElementById('profAvatarPreview');
@@ -1690,6 +1711,24 @@ async function renderProfileModal(){
     ).join('');
   }
 }
+/* ============ TEAMS DEEP LINK ============
+   Instant 1:1 Teams chat with a colleague — no app registration, no Graph
+   permission, just the standard Teams deep-link URL. Complements this app's
+   own chat: Teams gets a real push notification on phone/desktop even when
+   this browser tab is closed, which matters for "I need this person right
+   now" versus a group/broadcast message here. */
+function teamsChatUrl(upn){
+  return 'https://teams.microsoft.com/l/chat/0/0?users=' + encodeURIComponent(upn);
+}
+function openTeamsChat(upn, name){
+  if(!upn){ alert((name?name+' has':'This employee has')+' no Microsoft 365 email on file yet — ask IT to add it to the M365UPN column in EmployeeDirectory.'); return; }
+  window.open(teamsChatUrl(upn), '_blank');
+}
+function openTeamsChatForProfile(){
+  const u = getUser(profileViewingUid);
+  if(u) openTeamsChat(u.upn, u.name);
+}
+
 function pickProfileColor(c){ profSelectedColor = c; renderProfileModal(); }
 function pickProfileEmoji(e){ profSelectedEmoji = e; renderProfileModal(); }
 
@@ -2442,6 +2481,7 @@ function renderMembersModal(){
   const listBox = document.getElementById('memberListBox');
   listBox.innerHTML = g.memberIds.map(uid=>{
     const u = getUser(uid);
+    const isSelf = uid===currentUserId;
     return `
     <div class="member-row">
       <div class="member-click" onclick="viewEmployeeProfile('${uid}')" title="View profile">
@@ -2451,6 +2491,9 @@ function renderMembersModal(){
           <div class="member-title">${u.title}</div>
         </div>
       </div>
+      ${!isSelf ? `<button class="member-teams-btn" onclick="event.stopPropagation();openTeamsChat('${u.upn||''}','${escapeHtml(u.name).replace(/'/g,"\\'")}')" title="Chat with ${escapeHtml(u.name)} in Teams" aria-label="Chat in Teams">
+        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M16.5 7.5a3 3 0 1 0-2.9-3.75h.01A3 3 0 0 0 16.5 7.5Zm-6 1.5a3.75 3.75 0 1 0-3.75-3.75A3.75 3.75 0 0 0 10.5 9Zm7.88.75h-3.13a3.63 3.63 0 0 0-1.02.15 5.24 5.24 0 0 1 1.02 3.1v4.25c0 .3-.03.58-.08.85h3.46A1.87 1.87 0 0 0 20.5 16.2v-3.08a3.87 3.87 0 0 0-2.12-3.87ZM14.25 13.5a3.75 3.75 0 0 0-3.75-3.75H6.75A3.75 3.75 0 0 0 3 13.5v3.38A2.63 2.63 0 0 0 5.63 19.5h5.99a2.63 2.63 0 0 0 2.63-2.63V13.5Z" fill="#fff"/></svg>
+      </button>` : ''}
       ${manage ? `<button class="remove-btn" onclick="event.stopPropagation();removeMember('${g.id}','${uid}')">Remove</button>` : ''}
     </div>`;
   }).join('');
@@ -2939,6 +2982,7 @@ function isSameDay(t1, t2){
 function todaysPositionFor(branchId){
   return positions.filter(p=>p.branchId===branchId && isSameDay(p.time, Date.now())).sort((a,b)=>b.time-a.time)[0];
 }
+
 function openPositions(){
   document.getElementById('positionsOverlay').classList.add('show');
   document.querySelectorAll('.mn-btn').forEach(b=>b.classList.remove('active'));
