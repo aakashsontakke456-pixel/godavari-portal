@@ -191,6 +191,17 @@
   .attachment-chip .ac-name{font-size:12.5px;font-weight:600;word-break:break-all;}
   .attachment-chip .ac-size{font-size:10.5px;color:var(--muted);}
   .attachment-image{max-width:220px;border-radius:8px;display:block;margin-top:2px;}
+  .attachment-media-wrap{position:relative;max-width:220px;margin-top:2px;}
+  .attachment-media-wrap .attachment-image{margin-top:0;}
+  .attachment-dl-btn{
+    position:absolute;bottom:6px;right:6px;width:30px;height:30px;border-radius:50%;
+    background:rgba(0,0,0,.55);color:#fff;display:flex;align-items:center;justify-content:center;
+    font-size:15px;text-decoration:none;border:1px solid rgba(255,255,255,.4);
+  }
+  .attachment-dl-btn:hover{background:rgba(0,0,0,.75);}
+  /* ============ MESSAGE STATUS TICKS (sent/delivered) ============ */
+  .tick{font-size:12px;color:var(--muted);letter-spacing:-2px;margin-left:1px;}
+  .tick.read{color:#34a1f2;} /* blue, WhatsApp-style, once we know it's been seen */
 
   /* ============ ATTACHMENT PREVIEW (WhatsApp-style: select -> preview -> confirm send) ============ */
   .attach-preview-overlay{
@@ -622,6 +633,7 @@
   <div style="display:flex;align-items:center;gap:12px;">
     <span class="sync-badge checking" id="syncBadge" onclick="retrySync()" title="SharePoint / Graph connection status">⏳<span class="btn-label"> Checking…</span></span>
     <button id="positionsBtn" class="desktop-positions-btn" onclick="openPositions()" style="background:#0e4a40;color:#fff;border:1px solid #1d6f5f;border-radius:8px;padding:7px 12px;font-size:12.5px;font-weight:700;cursor:pointer;">📊 Bank Positions</button>
+    <a href="https://outlook.office.com/mail/deeplink/compose" target="_blank" rel="noopener" class="meeting-btn" title="Compose a new email in Outlook" style="text-decoration:none;display:inline-flex;align-items:center;">📧<span class="btn-label"> Outlook</span></a>
     <div id="meetingBtnWrap"></div>
     <div class="userchip" id="currentUserChip" title="View / edit your profile" onclick="openMyProfile()" style="cursor:pointer;"></div>
     <button class="logout-btn" onclick="confirmLogout()" title="Logout" aria-label="Logout">⏻<span class="btn-label"> Logout</span></button>
@@ -1805,9 +1817,15 @@ function renderMessage(m, g){
   if(isAttachment && m.attachment){
     const a = m.attachment;
     if(a.mime && a.mime.startsWith('image/')){
-      attachmentHtml = `<img class="attachment-image" src="${a.dataUrl}" alt="${escapeHtml(a.name)}">`;
+      attachmentHtml = `<div class="attachment-media-wrap">
+        <img class="attachment-image" src="${a.dataUrl}" alt="${escapeHtml(a.name)}">
+        <a class="attachment-dl-btn" href="${a.dataUrl}" download="${escapeHtml(a.name)}" title="Download photo" onclick="event.stopPropagation();">⬇</a>
+      </div>`;
     } else if(a.mime && a.mime.startsWith('video/')){
-      attachmentHtml = `<video class="attachment-image" src="${a.dataUrl}" controls></video>`;
+      attachmentHtml = `<div class="attachment-media-wrap">
+        <video class="attachment-image" src="${a.dataUrl}" controls></video>
+        <a class="attachment-dl-btn" href="${a.dataUrl}" download="${escapeHtml(a.name)}" title="Download video" onclick="event.stopPropagation();">⬇</a>
+      </div>`;
     } else {
       attachmentHtml = `<a class="attachment-chip" href="${a.dataUrl}" download="${escapeHtml(a.name)}">
         <span class="ac-icon">📄</span>
@@ -1836,7 +1854,7 @@ function renderMessage(m, g){
       ${attachmentHtml}
       ${positionHtml}
       ${m.text ? `<div class="msg-text">${escapeHtml(m.text)}</div>` : ''}
-      <div class="msg-meta">${isCircular?'<span class="pin-tag">📌 CIRCULAR</span>':''}<span class="msg-time">${fmtTime(m.time)}</span></div>
+      <div class="msg-meta">${isCircular?'<span class="pin-tag">📌 CIRCULAR</span>':''}<span class="msg-time">${fmtTime(m.time)}</span>${out?tickHtml(m,g):''}</div>
       <div class="reactions">
         ${reactionHtml}
         <span class="reaction-add" onclick="quickReact('${m.id}')">+ 👍</span>
@@ -1845,6 +1863,22 @@ function renderMessage(m, g){
   </div>`;
 }
 function escapeHtml(s){ return s.replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+/* ============ MESSAGE STATUS TICKS ============
+   By the time a message is in the `messages[gid]` array it has already been
+   written to the Messages SharePoint list (postMessageToGroup awaits the
+   create before pushing it locally) — so every message we can render is, by
+   definition, already sent + delivered. That part of a WhatsApp-style tick
+   is accurate and free.
+   A true "seen by" blue tick is NOT faked here: today's `lastSeen` tracking
+   only exists inside each person's own browser tab, so this browser has no
+   real way of knowing when someone else opened the chat. Showing a blue
+   tick without that data would just be a guess dressed up as a fact. If you
+   want real blue ticks later, add one column ("ReadBy") to the Messages
+   list and this function is the only place that needs to change. */
+function tickHtml(m, g){
+  return ` <span class="tick" title="Delivered">✓✓</span>`;
+}
 
 function quickReact(mid){ toggleReaction(mid, '👍'); }
 function toggleReaction(mid, emoji){
