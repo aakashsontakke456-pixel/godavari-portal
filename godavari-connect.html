@@ -322,6 +322,7 @@
   .swatch-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;}
   .swatch{width:30px;height:30px;border-radius:50%;cursor:pointer;border:2px solid transparent;}
   .swatch.selected{border-color:var(--teal-dark);}
+  .fallback-preview{width:44px;height:44px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:700;color:#fff;flex-shrink:0;border:2px solid var(--line);background:#888;transition:background .15s;}
   .emoji-row{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;}
   .emoji-opt{width:34px;height:34px;border-radius:8px;border:1px solid var(--line);background:#f7f5ee;font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;}
   .emoji-opt.selected{border-color:var(--leaf);background:#dcf3e8;}
@@ -804,7 +805,10 @@
       <div class="swatch-row" id="profSwatchRow"></div>
       <label>Choose avatar icon</label>
       <div class="emoji-row" id="profEmojiRow"></div>
-      <div class="settings-note">Upload a real photo, or fall back to a colour + icon — same idea as a WhatsApp profile photo. The colour + icon are used whenever no photo is set.</div>
+      <div style="display:flex;align-items:center;gap:10px;margin-top:10px;">
+        <div class="fallback-preview" id="profFallbackPreview">Aa</div>
+        <div class="settings-note" style="margin:0;">This is how your avatar looks whenever no photo is set — e.g. if you remove your photo later. Your pick is saved the moment you hit Save below, even while a photo is still showing above.</div>
+      </div>
     </div>
     <div style="margin-top:10px;">
       <div class="profile-field"><span>Employee ID</span><span id="profEmpId"></span></div>
@@ -1612,12 +1616,18 @@ function openMyProfile(){
   if(!currentUserId) return;
   profileViewingUid = currentUserId;
   profPendingPhotoBlob = null; profPendingPhotoPreviewUrl = null;
+  const u = getUser(currentUserId);
+  profSelectedColor = (u && u.avatarColor) || '';
+  profSelectedEmoji = (u && u.avatarIcon) || '';
   renderProfileModal();
   document.getElementById('profileModal').classList.add('show');
 }
 function viewEmployeeProfile(uid){
   profileViewingUid = uid;
   profPendingPhotoBlob = null; profPendingPhotoPreviewUrl = null;
+  const u = getUser(uid);
+  profSelectedColor = (u && u.avatarColor) || '';
+  profSelectedEmoji = (u && u.avatarIcon) || '';
   renderProfileModal();
   document.getElementById('profileModal').classList.add('show');
 }
@@ -1639,8 +1649,8 @@ async function renderProfileModal(){
   document.getElementById('profBranch').textContent = u.branch || '—';
   document.getElementById('profTitle').textContent = u.title || '—';
 
-  profSelectedColor = u.avatarColor || '';
-  profSelectedEmoji = u.avatarIcon || '';
+  const fbPreview = document.getElementById('profFallbackPreview');
+  if(fbPreview){ fbPreview.style.background = profSelectedColor || '#888'; fbPreview.textContent = profSelectedEmoji || 'Aa'; }
   const preview = document.getElementById('profAvatarPreview');
   const removeBtn = document.getElementById('profRemovePhotoBtn');
   const photoNote = document.getElementById('profPhotoNote');
