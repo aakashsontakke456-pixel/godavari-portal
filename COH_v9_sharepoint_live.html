@@ -447,6 +447,45 @@ tbody tr:hover { background: #FBFAF7; }
 }
 .modal__close { background: none; border: none; font-size: 18px; color: var(--ink-soft); padding: 4px; }
 
+/* Work-log detail popup */
+.worklog-modal { max-width: 720px; overflow: hidden; border: 1px solid rgba(25,81,70,0.12); }
+.worklog-modal .modal__header { padding: 22px 26px; color: #fff; border: 0; background: linear-gradient(125deg, #174f45 0%, #277b6a 58%, #d59a35 150%); }
+.worklog-modal .modal__header h2 { color: #fff; font-size: 22px; }
+.worklog-modal .modal__close { color: #fff; width: 32px; height: 32px; border-radius: 50%; background: rgba(255,255,255,0.16); line-height: 1; }
+.worklog-modal .modal__close:hover { background: rgba(255,255,255,0.28); }
+.worklog-modal .modal__body { padding: 24px 26px 26px; background: linear-gradient(180deg, #f6fbf9 0%, #fff 38%); }
+.worklog-detail__employee { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+.worklog-detail__avatar { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 13px; color: #176155; background: #dff1eb; font-weight: 800; }
+.worklog-detail__employee-name { font-weight: 750; color: var(--ink); }
+.worklog-detail__employee-meta { font-size: 12px; color: var(--ink-soft); margin-top: 2px; }
+.worklog-detail__metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 22px; }
+.worklog-metric { padding: 13px; min-height: 82px; border-radius: 12px; background: #fff; border: 1px solid #e3ece8; }
+.worklog-metric:nth-child(1) { border-top: 3px solid #26836f; }
+.worklog-metric:nth-child(2) { border-top: 3px solid #d59a35; }
+.worklog-metric:nth-child(3) { border-top: 3px solid #5d7bb5; }
+.worklog-metric__label { display: block; font-size: 11px; font-weight: 700; color: var(--ink-soft); text-transform: uppercase; letter-spacing: .04em; }
+.worklog-metric__value { display: block; margin-top: 5px; font: 700 20px var(--font-mono); color: var(--ink); }
+.worklog-detail__section { padding: 17px; border-radius: 12px; background: #fff; border: 1px solid #e3ece8; }
+.worklog-detail__section-title { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; font-size: 15px; }
+.worklog-detail__task { display: flex; justify-content: space-between; gap: 16px; padding: 10px 0; border-top: 1px dashed #d8e4df; }
+.worklog-detail__task-label { color: var(--ink-soft); }
+.worklog-detail__task-value { font-family: var(--font-mono); font-weight: 700; text-align: right; }
+.worklog-modal .modal__footer { padding: 14px 26px; background: #fff; }
+@media (max-width: 560px) { .worklog-detail__metrics { grid-template-columns: 1fr; } .worklog-modal .modal__header, .worklog-modal .modal__body, .worklog-modal .modal__footer { padding-left: 18px; padding-right: 18px; } }
+
+/* Manager approval reminder */
+.approval-alert-modal { max-width: 500px; overflow: hidden; border: 1px solid rgba(213,154,53,0.45); animation: approval-alert-pop .42s ease-out; }
+.approval-alert-modal .modal__header { padding: 22px 24px; color: #fff; border: 0; background: linear-gradient(125deg, #a85c19, #d89124 58%, #1e6f60); }
+.approval-alert-modal .modal__header h2 { color: #fff; }
+.approval-alert-modal .modal__close { color: #fff; }
+.approval-alert-modal .modal__body { padding: 26px 24px; text-align: center; background: linear-gradient(180deg, #fff9ec, #fff); }
+.approval-alert__icon { width: 68px; height: 68px; display: grid; place-items: center; margin: 0 auto 14px; border-radius: 50%; background: #fff0cb; color: #aa6716; font-size: 31px; box-shadow: 0 0 0 9px rgba(255,237,188,0.5); animation: approval-alert-pulse 1.4s ease-in-out infinite; }
+.approval-alert__count { color: #a85c19; font: 800 35px var(--font-mono); line-height: 1; }
+.approval-alert__message { margin: 8px auto 0; max-width: 340px; color: var(--ink-soft); }
+.approval-alert-modal .modal__footer { padding: 16px 24px; background: #fff; justify-content: center; }
+@keyframes approval-alert-pop { from { opacity: 0; transform: translateY(18px) scale(.96); } to { opacity: 1; transform: none; } }
+@keyframes approval-alert-pulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.08); } }
+
 .toast-stack {
   position: fixed; bottom: 22px; right: 22px; z-index: 200;
   display: flex; flex-direction: column; gap: 8px;
@@ -3138,7 +3177,16 @@ const Store = (() => {
 const Utils = (() => {
 
   function todayISO() {
-    return new Date().toISOString().slice(0, 10);
+    // Work-log dates are business dates, so never derive them from UTC.
+    // In India, UTC conversion can turn an early-morning entry into yesterday.
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Kolkata",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    }).formatToParts(new Date());
+    const value = Object.fromEntries(parts.map(({ type, value }) => [type, value]));
+    return `${value.year}-${value.month}-${value.day}`;
   }
 
   function formatDateLong(iso) {
@@ -3164,7 +3212,11 @@ const Utils = (() => {
   }
 
   function nowTime() {
-    return new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
+    return new Date().toLocaleTimeString("en-IN", {
+      timeZone: "Asia/Kolkata",
+      hour: "2-digit",
+      minute: "2-digit"
+    });
   }
 
   function initialsOf(name) {
@@ -3172,6 +3224,16 @@ const Utils = (() => {
     const cleaned = name.replace(/^(Mr\.|Mrs\.|Ms\.)\s*/i, "").trim();
     const parts = cleaned.split(/\s+/).filter(Boolean);
     return (parts[0]?.[0] || "") + (parts[1]?.[0] || "");
+  }
+
+  // Employee records store many women's names as surname + given name +
+  // father's name. Use the given name for a personal dashboard greeting.
+  function greetingName(name) {
+    const raw = String(name || "").trim();
+    const isFemaleTitle = /^(Ms\.?|Mrs\.?)\s*/i.test(raw);
+    const parts = raw.replace(/^(Mr\.|Mrs\.|Ms\.)\s*/i, "").split(/\s+/).filter(Boolean);
+    if (isFemaleTitle && parts.length >= 2) return parts[1];
+    return parts[0] || raw;
   }
 
   /** Sum numeric fields on a work log that count toward total file count, per dept schema. */
@@ -3284,7 +3346,7 @@ const Utils = (() => {
   }
 
   return {
-    todayISO, formatDateLong, formatDateShort, monthKey, monthLabel, nowTime,
+    todayISO, formatDateLong, formatDateShort, monthKey, monthLabel, nowTime, greetingName,
     initialsOf, sumCountingFields, targetForDepartment, computeProductivity, computedWorkingMinutes, productivityTone,
     escapeHtml, minutesToHM, hmToMinutes, uniq, downloadCSV
   };
@@ -3704,16 +3766,28 @@ const EmployeeDashboardView = (() => {
 
   function render(container, user) {
     const allLogs = Store.getWorkLogsByEmployee(user.id);
-    const thisMonth = Utils.monthKey(Utils.todayISO());
+    const today = Utils.todayISO();
+    const thisMonth = Utils.monthKey(today);
     const monthLogs = allLogs.filter(l => Utils.monthKey(l.date) === thisMonth);
+    const thisYear = today.slice(0, 4);
+    const yearLogs = allLogs.filter(l => String(l.date || "").startsWith(thisYear + "-"));
+    const todayDate = new Date(today + "T00:00:00Z");
+    const daysSinceMonday = (todayDate.getUTCDay() + 6) % 7;
+    todayDate.setUTCDate(todayDate.getUTCDate() - daysSinceMonday);
+    const weekStart = todayDate.toISOString().slice(0, 10);
+    const weekLogs = allLogs.filter(l => l.date >= weekStart && l.date <= today);
+    const fileTotal = logs => logs.reduce((sum, l) => sum + (l.totalFileDone || Utils.sumCountingFields(l.departmentKey, l.fields)), 0);
 
-    const filesThisMonth = monthLogs.reduce((sum, l) => sum + (l.totalFileDone || Utils.sumCountingFields(l.departmentKey, l.fields)), 0);
+    const filesThisMonth = fileTotal(monthLogs);
+    const filesThisWeek = fileTotal(weekLogs);
+    const filesThisYear = fileTotal(yearLogs);
+    const allTimeFiles = fileTotal(allLogs);
     const validProdLogs = monthLogs.filter(l => l.productivityPct !== null && l.productivityPct !== undefined);
     const avgProductivity = validProdLogs.length
       ? Math.round((validProdLogs.reduce((s, l) => s + l.productivityPct, 0) / validProdLogs.length) * 10) / 10
       : null;
     const pendingApprovals = allLogs.filter(l => l.approvalStatus === "Pending").length;
-    const todayLog = allLogs.find(l => l.date === Utils.todayISO());
+    const todayLog = allLogs.find(l => l.date === today);
 
     const dept = Store.getDepartmentByName(user.department);
 
@@ -3721,7 +3795,7 @@ const EmployeeDashboardView = (() => {
       <div class="content__header">
         <div>
           <div class="content__eyebrow">My Dashboard</div>
-          <h1>Good day, ${Utils.escapeHtml(user.name.split(" ").slice(-1)[0] || user.name)}</h1>
+          <h1>Good day, ${Utils.escapeHtml(Utils.greetingName(user.name))}</h1>
           <p class="content__desc">${
             (user.departments && user.departments.length > 1)
               ? user.departments.join(" · ") + ' · '
@@ -3751,6 +3825,33 @@ const EmployeeDashboardView = (() => {
           <div class="stat-card__label">Today's status</div>
           <div class="stat-card__value" style="font-size:18px;">${todayLog ? "Logged" : "Not logged"}</div>
           <div class="stat-card__hint">${user.attendanceStatus || "Present"} · ${Utils.formatDateShort(Utils.todayISO())}</div>
+        </div>
+      </div>
+
+      <div class="card card--pad" style="margin-bottom:22px;">
+        <h2 style="margin-bottom:4px;">My work totals</h2>
+        <p class="content__desc" style="margin-bottom:16px;">Your completed-file count by period. The daily chart below remains available for day-wise tracking.</p>
+        <div class="stat-grid">
+          <div class="stat-card stat-card--accent-sage">
+            <div class="stat-card__label">This week</div>
+            <div class="stat-card__value num">${filesThisWeek}</div>
+            <div class="stat-card__hint">${weekLogs.length} logged day${weekLogs.length === 1 ? "" : "s"} · from ${Utils.formatDateShort(weekStart)}</div>
+          </div>
+          <div class="stat-card stat-card--accent-brand">
+            <div class="stat-card__label">This month</div>
+            <div class="stat-card__value num">${filesThisMonth}</div>
+            <div class="stat-card__hint">${monthLogs.length} logged day${monthLogs.length === 1 ? "" : "s"} · ${Utils.monthLabel(today)}</div>
+          </div>
+          <div class="stat-card stat-card--accent-amber">
+            <div class="stat-card__label">This year</div>
+            <div class="stat-card__value num">${filesThisYear}</div>
+            <div class="stat-card__hint">${yearLogs.length} logged day${yearLogs.length === 1 ? "" : "s"} · ${thisYear}</div>
+          </div>
+          <div class="stat-card stat-card--accent-brand">
+            <div class="stat-card__label">All time</div>
+            <div class="stat-card__value num">${allTimeFiles}</div>
+            <div class="stat-card__hint">${allLogs.length} entry${allLogs.length === 1 ? "" : "ies"} recorded</div>
+          </div>
         </div>
       </div>
 
@@ -4372,22 +4473,27 @@ const HistoryView = (() => {
     const overlay = document.createElement("div");
     overlay.className = "modal-overlay";
     overlay.innerHTML = `
-      <div class="modal">
+      <div class="modal worklog-modal">
         <div class="modal__header">
           <h2>${Utils.escapeHtml(log.departmentName)} — ${Utils.formatDateLong(log.date)}</h2>
           <button class="modal__close">&times;</button>
         </div>
         <div class="modal__body">
-          <div class="kv-row"><span class="kv-row__label">Employee</span><span class="kv-row__value">${Utils.escapeHtml(log.employeeName)}</span></div>
-          <div class="kv-row"><span class="kv-row__label">Total File Done</span><span class="kv-row__value">${log.totalFileDone ?? "—"}</span></div>
-          <div class="kv-row"><span class="kv-row__label">Productivity</span><span class="kv-row__value">${log.productivityPct !== null ? log.productivityPct + "%" : "—"}</span></div>
-          <div class="kv-row"><span class="kv-row__label">Working hours</span><span class="kv-row__value">${Utils.minutesToHM(log.totalWorkingMinutes)}</span></div>
-          <div class="kv-row"><span class="kv-row__label">Approval status</span><span class="kv-row__value">${log.approvalStatus}</span></div>
-          <div class="divider"></div>
-          <h3 style="margin-bottom:10px;">Task breakdown</h3>
+          <div class="worklog-detail__employee">
+            <div class="worklog-detail__avatar">${Utils.escapeHtml(Utils.initialsOf(log.employeeName))}</div>
+            <div><div class="worklog-detail__employee-name">${Utils.escapeHtml(log.employeeName)}</div><div class="worklog-detail__employee-meta">${Utils.escapeHtml(log.designation || "Work entry")} · ${Utils.escapeHtml(log.approvalStatus || "Pending")}</div></div>
+          </div>
+          <div class="worklog-detail__metrics">
+            <div class="worklog-metric"><span class="worklog-metric__label">Files completed</span><span class="worklog-metric__value">${log.totalFileDone ?? "—"}</span></div>
+            <div class="worklog-metric"><span class="worklog-metric__label">Productivity</span><span class="worklog-metric__value">${log.productivityPct !== null ? log.productivityPct + "%" : "—"}</span></div>
+            <div class="worklog-metric"><span class="worklog-metric__label">Working hours</span><span class="worklog-metric__value">${Utils.minutesToHM(log.totalWorkingMinutes)}</span></div>
+          </div>
+          <div class="worklog-detail__section">
+            <div class="worklog-detail__section-title"><strong>Task breakdown</strong><span class="status-chip status-chip--${log.approvalStatus === "Approved" ? "approved" : log.approvalStatus === "Rejected" ? "rejected" : "pending"}">${Utils.escapeHtml(log.approvalStatus || "Pending")}</span></div>
           ${dept ? dept.fields.map(f => `
-            <div class="kv-row"><span class="kv-row__label">${f.label}</span><span class="kv-row__value">${log.fields[f.id] ?? "—"}</span></div>
+            <div class="worklog-detail__task"><span class="worklog-detail__task-label">${Utils.escapeHtml(f.label)}</span><span class="worklog-detail__task-value">${Utils.escapeHtml(String(log.fields[f.id] ?? "—"))}</span></div>
           `).join("") : "<p>No department schema found.</p>"}
+          </div>
         </div>
         <div class="modal__footer">
           <button class="btn btn--ghost" id="modal-close-btn">Close</button>
@@ -5302,21 +5408,27 @@ const ApprovalsView = (() => {
     const overlay = document.createElement("div");
     overlay.className = "modal-overlay";
     overlay.innerHTML = `
-      <div class="modal">
+      <div class="modal worklog-modal">
         <div class="modal__header">
           <h2>${Utils.escapeHtml(log.departmentName)} — ${Utils.formatDateLong(log.date)}</h2>
           <button class="modal__close">&times;</button>
         </div>
         <div class="modal__body">
-          <div class="kv-row"><span class="kv-row__label">Employee</span><span class="kv-row__value">${Utils.escapeHtml(log.employeeName)}</span></div>
-          <div class="kv-row"><span class="kv-row__label">Total File Done</span><span class="kv-row__value">${log.totalFileDone ?? "—"}</span></div>
-          <div class="kv-row"><span class="kv-row__label">Productivity</span><span class="kv-row__value">${log.productivityPct !== null ? log.productivityPct + "%" : "—"}</span></div>
-          <div class="kv-row"><span class="kv-row__label">Working hours</span><span class="kv-row__value">${Utils.minutesToHM(log.totalWorkingMinutes)}</span></div>
-          <div class="divider"></div>
-          <h3 style="margin-bottom:10px;">Task breakdown</h3>
+          <div class="worklog-detail__employee">
+            <div class="worklog-detail__avatar">${Utils.escapeHtml(Utils.initialsOf(log.employeeName))}</div>
+            <div><div class="worklog-detail__employee-name">${Utils.escapeHtml(log.employeeName)}</div><div class="worklog-detail__employee-meta">${Utils.escapeHtml(log.designation || "Work entry")} · ${Utils.escapeHtml(log.approvalStatus || "Pending")}</div></div>
+          </div>
+          <div class="worklog-detail__metrics">
+            <div class="worklog-metric"><span class="worklog-metric__label">Files completed</span><span class="worklog-metric__value">${log.totalFileDone ?? "—"}</span></div>
+            <div class="worklog-metric"><span class="worklog-metric__label">Productivity</span><span class="worklog-metric__value">${log.productivityPct !== null ? log.productivityPct + "%" : "—"}</span></div>
+            <div class="worklog-metric"><span class="worklog-metric__label">Working hours</span><span class="worklog-metric__value">${Utils.minutesToHM(log.totalWorkingMinutes)}</span></div>
+          </div>
+          <div class="worklog-detail__section">
+            <div class="worklog-detail__section-title"><strong>Task breakdown</strong><span class="status-chip status-chip--${log.approvalStatus === "Approved" ? "approved" : log.approvalStatus === "Rejected" ? "rejected" : "pending"}">${Utils.escapeHtml(log.approvalStatus || "Pending")}</span></div>
           ${dept ? dept.fields.map(f => `
-            <div class="kv-row"><span class="kv-row__label">${f.label}</span><span class="kv-row__value">${log.fields[f.id] ?? "—"}</span></div>
+            <div class="worklog-detail__task"><span class="worklog-detail__task-label">${Utils.escapeHtml(f.label)}</span><span class="worklog-detail__task-value">${Utils.escapeHtml(String(log.fields[f.id] ?? "—"))}</span></div>
           `).join("") : "<p>No schema found.</p>"}
+          </div>
         </div>
         <div class="modal__footer">
           <button class="btn btn--ghost" id="modal-close-btn">Close</button>
@@ -6178,6 +6290,7 @@ const App = (() => {
   };
   let liveSyncTimer = null;
   let liveSyncInFlight = false;
+  let liveSyncListenersAttached = false;
 
   function navFor(role) {
     if (role === "Admin") return ADMIN_NAV;
@@ -6193,35 +6306,83 @@ const App = (() => {
     return "dashboard";
   }
 
+  function managerPendingApprovals() {
+    const employeeIds = new Set(
+      Store.getEmployees()
+        .filter(e => e.role !== "Manager" && e.role !== "Chief Manager")
+        .map(e => e.id)
+    );
+    return Store.getWorkLogs().filter(log => log.approvalStatus === "Pending" && employeeIds.has(log.employeeId));
+  }
+
+  function showManagerApprovalAlert(user) {
+    if (user.role !== "Manager") return;
+    const pending = managerPendingApprovals();
+    if (!pending.length || document.querySelector(".approval-alert-modal")) return;
+
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    overlay.innerHTML = `
+      <div class="modal approval-alert-modal" role="dialog" aria-modal="true" aria-labelledby="approval-alert-title">
+        <div class="modal__header">
+          <h2 id="approval-alert-title">Approvals need your action</h2>
+          <button class="modal__close" aria-label="Close">&times;</button>
+        </div>
+        <div class="modal__body">
+          <div class="approval-alert__icon" aria-hidden="true">&#9888;</div>
+          <div class="approval-alert__count">${pending.length}</div>
+          <h3 style="margin-top:8px;">pending work log${pending.length === 1 ? "" : "s"}</h3>
+          <p class="approval-alert__message">Please review and approve or reject the employee entries waiting for your decision.</p>
+        </div>
+        <div class="modal__footer">
+          <button class="btn btn--ghost" id="approval-alert-later">Later</button>
+          <button class="btn btn--primary" id="approval-alert-open">Open approvals</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const close = () => overlay.remove();
+    overlay.querySelector(".modal__close").addEventListener("click", close);
+    overlay.querySelector("#approval-alert-later").addEventListener("click", close);
+    overlay.querySelector("#approval-alert-open").addEventListener("click", () => {
+      close();
+      navigate("approvals");
+    });
+    overlay.addEventListener("click", event => { if (event.target === overlay) close(); });
+  }
+
+  async function syncLiveData() {
+    if (liveSyncInFlight || !Store.currentUser()) return;
+    if (document.querySelector(".modal-overlay")) return;
+    liveSyncInFlight = true;
+    try {
+      await Store.refreshFromSP();
+      SPConnection.setStatus("live");
+      if (Store.currentUser()) {
+        // Never replace a work-entry form while the employee is typing.
+        const isOnLogWork = state.route === "log-work";
+        const hasFormData = isOnLogWork && document.querySelector(".dept-field-input");
+        if (!hasFormData) renderShell();
+      }
+    } catch (err) {
+      SPConnection.setStatus("offline");
+      console.warn("Live SharePoint refresh failed:", err.message);
+    } finally {
+      liveSyncInFlight = false;
+    }
+  }
+
   function startLiveSync() {
     stopLiveSync();
-    liveSyncTimer = setInterval(async () => {
-      if (liveSyncInFlight || !Store.currentUser()) return;
-      if (document.querySelector(".modal-overlay")) return;
-      liveSyncInFlight = true;
-      try {
-        await Store.refreshFromSP();
-        SPConnection.setStatus("live");
-        if (Store.currentUser()) {
-          // Do NOT re-render the shell if the user is actively filling in the log-work form.
-          // Re-rendering would wipe their in-progress field values.
-          // Instead, only update the connection badge and non-form parts of the UI.
-          const isOnLogWork = state.route === "log-work";
-          const hasFormData = isOnLogWork && document.querySelector(".dept-field-input");
-          if (hasFormData) {
-            // Just update the connection badge status silently — don't touch the form
-            SPConnection.setStatus("live");
-          } else {
-            renderShell();
-          }
-        }
-      } catch (err) {
-        SPConnection.setStatus("offline");
-        console.warn("Live SharePoint refresh failed:", err.message);
-      } finally {
-        liveSyncInFlight = false;
-      }
-    }, 30000);
+    // SharePoint does not push list changes directly into this browser, so poll
+    // frequently and also re-sync as soon as an employee returns to the tab.
+    liveSyncTimer = setInterval(syncLiveData, 10000);
+    if (!liveSyncListenersAttached) {
+      window.addEventListener("focus", syncLiveData);
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") syncLiveData();
+      });
+      liveSyncListenersAttached = true;
+    }
   }
 
   function stopLiveSync() {
@@ -6253,6 +6414,8 @@ const App = (() => {
     state.route = defaultRouteFor(user.role);
     renderShell();
     startLiveSync();
+    // Show the action reminder once the manager's dashboard is visible.
+    window.setTimeout(() => showManagerApprovalAlert(user), 250);
   }
 
   function navigate(route, params = {}) {
@@ -6268,7 +6431,7 @@ const App = (() => {
     const nav = navFor(user.role);
     const userPhotoSrc = user._photoBlobUrl || user.photoUrl || "";
     const pendingCount = user.role === "Manager"
-      ? Store.getWorkLogs().filter(l => l.approvalStatus === "Pending").length
+      ? managerPendingApprovals().length
       : 0;
 
     document.getElementById("root").innerHTML = `
