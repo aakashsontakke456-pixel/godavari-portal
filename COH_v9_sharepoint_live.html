@@ -486,6 +486,22 @@ tbody tr:hover { background: #FBFAF7; }
 @keyframes approval-alert-pop { from { opacity: 0; transform: translateY(18px) scale(.96); } to { opacity: 1; transform: none; } }
 @keyframes approval-alert-pulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.08); } }
 
+/* Employee period totals popup */
+.work-totals-modal { max-width: 760px; overflow: hidden; border: 1px solid rgba(28,90,77,0.16); }
+.work-totals-modal .modal__header { padding: 22px 26px; color: #fff; border: 0; background: linear-gradient(125deg, #164d43, #277b6a 58%, #4a8d7b); }
+.work-totals-modal .modal__header h2 { color: #fff; }
+.work-totals-modal .modal__close { color: #fff; }
+.work-totals-modal .modal__body { padding: 25px 26px; background: linear-gradient(180deg, #f2faf7 0%, #fff 42%); }
+.work-totals__intro { margin: 0 0 19px; color: var(--ink-soft); }
+.work-totals__grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 13px; }
+.work-totals__item { min-height: 126px; padding: 18px; border: 1px solid #dce9e5; border-radius: 14px; background: #fff; }
+.work-totals__item:nth-child(1) { border-top: 4px solid #3e917b; } .work-totals__item:nth-child(2) { border-top: 4px solid #195f52; } .work-totals__item:nth-child(3) { border-top: 4px solid #d38c25; } .work-totals__item:nth-child(4) { border-top: 4px solid #617fb7; }
+.work-totals__label { display: block; font-size: 12px; font-weight: 800; color: var(--ink-soft); text-transform: uppercase; letter-spacing: .05em; }
+.work-totals__value { display: block; margin: 8px 0 5px; font: 800 29px var(--font-mono); color: var(--ink); }
+.work-totals__hint { font-size: 12px; color: var(--ink-soft); }
+.work-totals-modal .modal__footer { padding: 15px 26px; background: #fff; }
+@media (max-width: 560px) { .work-totals__grid { grid-template-columns: 1fr; } }
+
 .toast-stack {
   position: fixed; bottom: 22px; right: 22px; z-index: 200;
   display: flex; flex-direction: column; gap: 8px;
@@ -2700,7 +2716,9 @@ const Store = (() => {
       FieldNames.key(d.name).includes(FieldNames.key(deptName))
     );
     const dateRaw = get("date");
-    const date = dateRaw ? String(dateRaw).slice(0, 10) : Utils.todayISO();
+    // SharePoint returns a date-only field as a UTC timestamp. Convert that
+    // timestamp to the COH business timezone before extracting its calendar day.
+    const date = dateRaw ? Utils.sharePointDateToISO(dateRaw) : Utils.todayISO();
     const total = Number(get("total") || 0);
     const employeeId = String(get("employeeId") || "").trim();
     const employee = employeeId ? _empCache.find(e => FieldNames.key(e.id) === FieldNames.key(employeeId)) : null;
@@ -3189,6 +3207,20 @@ const Utils = (() => {
     return `${value.year}-${value.month}-${value.day}`;
   }
 
+  function sharePointDateToISO(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    // Preserve a true date-only value exactly as supplied.
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+    const date = new Date(raw);
+    if (Number.isNaN(date.getTime())) return raw.slice(0, 10);
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit"
+    }).formatToParts(date);
+    const result = Object.fromEntries(parts.map(({ type, value }) => [type, value]));
+    return `${result.year}-${result.month}-${result.day}`;
+  }
+
   function formatDateLong(iso) {
     if (!iso) return "—";
     const d = new Date(iso + "T00:00:00");
@@ -3346,7 +3378,7 @@ const Utils = (() => {
   }
 
   return {
-    todayISO, formatDateLong, formatDateShort, monthKey, monthLabel, nowTime, greetingName,
+    todayISO, sharePointDateToISO, formatDateLong, formatDateShort, monthKey, monthLabel, nowTime, greetingName,
     initialsOf, sumCountingFields, targetForDepartment, computeProductivity, computedWorkingMinutes, productivityTone,
     escapeHtml, minutesToHM, hmToMinutes, uniq, downloadCSV
   };
@@ -3802,7 +3834,10 @@ const EmployeeDashboardView = (() => {
               : (user.department ? `${Utils.escapeHtml(user.department)} · ` : "")
           }${Utils.escapeHtml(user.designation || "")}</p>
         </div>
-        <button class="btn btn--primary" id="btn-go-log-work">+ Log today's work</button>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end;">
+          <button class="btn btn--ghost" id="btn-show-work-totals">My work totals</button>
+          <button class="btn btn--primary" id="btn-go-log-work">+ Log today's work</button>
+        </div>
       </div>
 
       <div class="stat-grid">
@@ -3829,33 +3864,6 @@ const EmployeeDashboardView = (() => {
       </div>
 
       <div class="card card--pad" style="margin-bottom:22px;">
-        <h2 style="margin-bottom:4px;">My work totals</h2>
-        <p class="content__desc" style="margin-bottom:16px;">Your completed-file count by period. The daily chart below remains available for day-wise tracking.</p>
-        <div class="stat-grid">
-          <div class="stat-card stat-card--accent-sage">
-            <div class="stat-card__label">This week</div>
-            <div class="stat-card__value num">${filesThisWeek}</div>
-            <div class="stat-card__hint">${weekLogs.length} logged day${weekLogs.length === 1 ? "" : "s"} · from ${Utils.formatDateShort(weekStart)}</div>
-          </div>
-          <div class="stat-card stat-card--accent-brand">
-            <div class="stat-card__label">This month</div>
-            <div class="stat-card__value num">${filesThisMonth}</div>
-            <div class="stat-card__hint">${monthLogs.length} logged day${monthLogs.length === 1 ? "" : "s"} · ${Utils.monthLabel(today)}</div>
-          </div>
-          <div class="stat-card stat-card--accent-amber">
-            <div class="stat-card__label">This year</div>
-            <div class="stat-card__value num">${filesThisYear}</div>
-            <div class="stat-card__hint">${yearLogs.length} logged day${yearLogs.length === 1 ? "" : "s"} · ${thisYear}</div>
-          </div>
-          <div class="stat-card stat-card--accent-brand">
-            <div class="stat-card__label">All time</div>
-            <div class="stat-card__value num">${allTimeFiles}</div>
-            <div class="stat-card__hint">${allLogs.length} entry${allLogs.length === 1 ? "" : "ies"} recorded</div>
-          </div>
-        </div>
-      </div>
-
-      <div class="card card--pad" style="margin-bottom:22px;">
         <h2 style="margin-bottom:4px;">Last 14 days — Total File Done</h2>
         <p class="content__desc" style="margin-bottom:18px;">A quick look at your daily output trend.</p>
         <div id="chart-area"></div>
@@ -3863,12 +3871,51 @@ const EmployeeDashboardView = (() => {
 
       <div class="card card--pad">
         <h2 style="margin-bottom:14px;">Recent entries</h2>
-        ${renderRecentTable(allLogs.slice(0, 6))}
+        ${renderRecentTable([...allLogs].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 6))}
       </div>
     `;
 
     document.getElementById("btn-go-log-work").addEventListener("click", () => App.navigate("log-work"));
+    document.getElementById("btn-show-work-totals").addEventListener("click", () => showWorkTotals({
+      week: { files: filesThisWeek, logs: weekLogs, label: `From ${Utils.formatDateShort(weekStart)}` },
+      month: { files: filesThisMonth, logs: monthLogs, label: Utils.monthLabel(today) },
+      year: { files: filesThisYear, logs: yearLogs, label: thisYear },
+      allTime: { files: allTimeFiles, logs: allLogs, label: "All recorded work" }
+    }));
     renderChart(allLogs);
+  }
+
+  function showWorkTotals(totals) {
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    const item = (label, total) => `
+      <div class="work-totals__item">
+        <span class="work-totals__label">${label}</span>
+        <span class="work-totals__value">${total.files}</span>
+        <span class="work-totals__hint">${total.logs.length} logged day${total.logs.length === 1 ? "" : "s"} · ${Utils.escapeHtml(total.label)}</span>
+      </div>`;
+    overlay.innerHTML = `
+      <div class="modal work-totals-modal" role="dialog" aria-modal="true" aria-labelledby="work-totals-title">
+        <div class="modal__header">
+          <h2 id="work-totals-title">My work totals</h2>
+          <button class="modal__close" aria-label="Close">&times;</button>
+        </div>
+        <div class="modal__body">
+          <p class="work-totals__intro">Completed-file totals for your current week, month, year, and complete work history.</p>
+          <div class="work-totals__grid">
+            ${item("This week", totals.week)}
+            ${item("This month", totals.month)}
+            ${item("This year", totals.year)}
+            ${item("All time", totals.allTime)}
+          </div>
+        </div>
+        <div class="modal__footer"><button class="btn btn--primary" id="work-totals-close">Done</button></div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const close = () => overlay.remove();
+    overlay.querySelector(".modal__close").addEventListener("click", close);
+    overlay.querySelector("#work-totals-close").addEventListener("click", close);
+    overlay.addEventListener("click", event => { if (event.target === overlay) close(); });
   }
 
   function renderRecentTable(logs) {
@@ -3952,11 +3999,13 @@ const LogWorkView = (() => {
 
   function render(container, user, params) {
     const newLogId = params && params.logId ? params.logId : null;
+    const selectedDate = params && params.date ? params.date : Utils.todayISO();
 
     // Guard: if the user is already actively filling in this form (same context),
     // do NOT re-initialise formData or currentDeptKey — that would wipe their work.
     const isAlreadyActive = container.querySelector && container.querySelector(".dept-field-input") !== null;
-    const isSameContext = isAlreadyActive && newLogId === editingLogId;
+    const currentFormDate = container.querySelector ? container.querySelector("#lw-date")?.value : null;
+    const isSameContext = isAlreadyActive && newLogId === editingLogId && currentFormDate === selectedDate;
     if (isSameContext) {
       // Silently skip the re-render — the form is already live with user's data intact.
       return;
@@ -4011,7 +4060,7 @@ const LogWorkView = (() => {
             <div class="field-grid" style="margin-bottom:18px;">
               <div class="field">
                 <label class="field__label">Date<span class="req">*</span></label>
-                <input type="date" id="lw-date" value="${editingLog ? editingLog.date : Utils.todayISO()}" required>
+                <input type="date" id="lw-date" value="${editingLog ? editingLog.date : selectedDate}" required>
               </div>
               ${isManagerEntry ? `
                 <div class="field">
@@ -4073,9 +4122,11 @@ const LogWorkView = (() => {
         ${!isManagerEntry ? `
           <aside class="lw-side">
             <div class="card card--pad lw-side__card">
-              <h3 style="margin-bottom:12px;">Quick lookup</h3>
-              <label class="field__label">Jump to date</label>
-              <input type="date" id="lw-side-datepick" value="${editingLog ? editingLog.date : Utils.todayISO()}" style="margin-bottom:14px;">
+              <h3 style="margin-bottom:4px;">Find a saved entry</h3>
+              <p class="content__desc" style="margin:0 0 10px;font-size:12px;">Choose a date to open its saved entry for viewing or editing.</p>
+              <label class="field__label">Work date</label>
+              <input type="date" id="lw-side-datepick" value="${editingLog ? editingLog.date : selectedDate}" style="margin-bottom:10px;">
+              <button type="button" class="btn btn--ghost" id="lw-lookup-date" style="width:100%;margin-bottom:14px;">Open entry for this date</button>
               <div class="lw-side__stats">
                 <div class="lw-side__stat">
                   <div class="lw-side__stat-value num">${myEntriesMonth}</div>
@@ -4106,6 +4157,10 @@ const LogWorkView = (() => {
               <div class="kv-row">
                 <span class="kv-row__label">Productivity %</span>
                 <span class="kv-row__value num" id="lw-side-productivity">—</span>
+              </div>
+              <div class="kv-row">
+                <span class="kv-row__label">Working hours</span>
+                <span class="kv-row__value num" id="lw-side-working-hours">00:00</span>
               </div>
             </div>
 
@@ -4149,8 +4204,20 @@ const LogWorkView = (() => {
     if (!isManagerEntry) {
       const sideDatePick = document.getElementById("lw-side-datepick");
       const mainDate = document.getElementById("lw-date");
+      const openDateEntry = () => {
+        const selected = sideDatePick.value;
+        if (!selected) return;
+        const existing = myLogs.find(log => log.date === selected);
+        if (existing) {
+          Toast.info("Saved entry opened for editing.");
+          App.navigate("log-work", { logId: existing.id });
+        } else {
+          App.navigate("log-work", { date: selected });
+        }
+      };
       sideDatePick.addEventListener("change", () => { mainDate.value = sideDatePick.value; });
       mainDate.addEventListener("change", () => { sideDatePick.value = mainDate.value; });
+      document.getElementById("lw-lookup-date").addEventListener("click", openDateEntry);
     }
 
     document.getElementById("lw-cancel").addEventListener("click", () => App.navigate(isManagerEntry ? "manager-dashboard" : "dashboard"));
@@ -4242,6 +4309,8 @@ const LogWorkView = (() => {
       const sideProdEl = document.getElementById("lw-side-productivity");
       sideProdEl.textContent = productivity !== null ? productivity + "%" : "—";
       sideProdEl.style.color = prodEl.style.color;
+      const sideWorkingEl = document.getElementById("lw-side-working-hours");
+      if (sideWorkingEl) sideWorkingEl.textContent = Utils.minutesToHM(Utils.computedWorkingMinutes(currentDeptKey, total, emp, formData) || 0);
     }
 
     const workingMinutes = Utils.computedWorkingMinutes(currentDeptKey, total, emp, formData);
